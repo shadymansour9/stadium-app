@@ -1,0 +1,82 @@
+{
+  "project_info": {
+    "project_number": "252689987865",
+    "project_id": "stadium-d5b5f",
+    "storage_bucket": "stadium-d5b5f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:252689987865:android:9d652fd2baa5aed749ad88",
+        "android_client_info": {
+          "package_name": "com.example.stadium_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCjPTavTVpOmKlFsR1sfKNNSSAzeCQpXYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "252689987865-7b22s35qcm2m17f3tqdhgls8g72aicfa.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.stadiumApp"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:252689987865:android:d95e5167bc7394ae49ad88",
+        "android_client_info": {
+          "package_name": "com.stadium.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCjPTavTVpOmKlFsR1sfKNNSSAzeCQpXYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "252689987865-7b22s35qcm2m17f3tqdhgls8g72aicfa.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.stadiumApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
