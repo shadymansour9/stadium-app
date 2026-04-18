@@ -1,16 +1,70 @@
-# stadium_app
+# \# 🏟️ STADIUM — Sports Venue Booking App
 
-A new Flutter project.
+# 
 
-## Getting Started
+# A full-stack mobile \& web application for booking football and tennis courts in Nazareth, Israel.
 
-This project is a starting point for a Flutter application.
+# 
 
-A few resources to get you started if this is your first Flutter project:
+# 🌐 \*\*Live Demo:\*\* https://stadium-d5b5f.web.app
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+# 
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+# \## 📱 Features
+
+# 
+
+# \- Book 2-hour slots at multiple stadiums
+
+# \- Join friends with a 4-digit booking code
+
+# \- Admin panel for venue owners
+
+# \- Real-time availability updates
+
+# \- In-app notifications
+
+# \- Hebrew \& English support
+
+# 
+
+# \## 🛠️ Tech Stack
+
+# 
+
+# \- \*\*Frontend:\*\* Flutter (Android + Web)
+
+# \- \*\*Backend:\*\* Firebase (Firestore, Auth, Hosting)
+
+# \- \*\*Notifications:\*\* Firebase Cloud Messaging
+
+# 
+
+# \## 📸 Screenshots
+
+# 
+
+# Coming soon...
+
+# 
+
+# \## 🚀 Getting Started
+
+# 
+
+# ```bash
+
+# flutter pub get
+
+# flutter run
+
+# ```
+
+# 
+
+# \## 👨‍💻 Developer
+
+# 
+
+# Shady Mansour — Flutter \& Web Developer
+
