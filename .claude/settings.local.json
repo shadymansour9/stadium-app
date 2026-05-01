@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(where flutter:*)",
-      "Bash(where dart:*)"
+      "Bash(where dart:*)",
+      "Bash(flutter analyze *)",
+      "PowerShell(cd C:\\\\Users\\\\sh--m\\\\stadium_app; flutter analyze lib/main.dart 2>&1 | Where-Object { $_ -match \"error\" })"
     ]
   }
 }

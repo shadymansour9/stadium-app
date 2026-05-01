@@ -31,6 +31,21 @@
 
   <title>stadium_app</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Fonts loaded from Google Fonts CDN. CanvasKit's "Could not find a set
+       of Noto fonts" warning is silenced by loading the actual Noto fallback
+       fonts the engine looks for: Noto Sans Hebrew (Hebrew glyphs) and
+       Noto Color Emoji (📅 ⚽ 🎉 etc.). Heebo is the primary UI font. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800;900&family=Noto+Sans+Hebrew:wght@400;500;600;700;800;900&family=Noto+Color+Emoji&display=swap" rel="stylesheet">
+
+  <style>
+    /* Make CanvasKit able to discover the loaded fonts as fallbacks. */
+    body {
+      font-family: 'Heebo', 'Noto Sans Hebrew', 'Noto Color Emoji', sans-serif;
+    }
+  </style>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

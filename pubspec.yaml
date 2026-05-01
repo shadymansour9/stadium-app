@@ -38,6 +38,8 @@ dependencies:
   firebase_auth: ^6.4.0
   cloud_firestore: ^6.3.0
   firebase_messaging: ^16.2.0
+  firebase_storage: ^13.3.0
+  image_picker: ^1.1.2
   excel: ^4.0.6
 
 dev_dependencies:
