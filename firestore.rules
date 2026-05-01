@@ -1,0 +1,107 @@
+rules_version = '2';
+
+// STADIUM - Firestore Security Rules
+// Deploy with: firebase deploy --only firestore:rules
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email in [
+        'admin@gmail.com',
+        'admin.md9@gmail.com',
+        'admin.ystadium@gmail.com'
+      ];
+    }
+
+    // 1) USERS - each user reads/writes only their own profile.
+    match /users/{uid} {
+      allow read:   if isSignedIn() && request.auth.uid == uid;
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // 2) BOOKINGS - signed-in users see availability and join with codes.
+    match /bookings/{bookingId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (
+        resource.data.userId == request.auth.uid
+        || isAdmin()
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+    }
+
+    // 3) ADMIN_SCHEDULE - per-stadium per-day overrides.
+    match /admin_schedule/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // 4) NOTIFICATIONS - each user reads/writes only their own.
+    match /notifications/{notifId} {
+      allow read:   if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // 5) RECURRING_BLOCKS - weekly fixed reservations.
+    match /recurring_blocks/{blockId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Booking types (per-stadium configurable types).
+    match /booking_types/{typeId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Training groups (kids' programs).
+    match /training_groups/{groupId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Parents register kids - parents see/manage their own; admins manage all.
+    match /training_registrations/{regId} {
+      allow read:   if isSignedIn() && (
+        resource.data.parentUserId == request.auth.uid || isAdmin()
+      );
+      allow create: if isSignedIn()
+        && request.resource.data.parentUserId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        resource.data.parentUserId == request.auth.uid || isAdmin()
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.parentUserId == request.auth.uid || isAdmin()
+      );
+    }
+
+    // Venue / stadium background images.
+    match /venue_config/{venueId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /stadium_config/{stadiumId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Default-deny: anything not matched above is rejected.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

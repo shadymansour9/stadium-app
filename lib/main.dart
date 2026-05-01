@@ -224,6 +224,72 @@ Future<T?> navigateTo<T>(BuildContext context, Widget page) {
   );
 }
 
+// ==================== ERROR HANDLER ====================
+/// Maps any thrown error to a user-friendly Hebrew/English message and shows
+/// it in a SnackBar. Use this everywhere Firestore writes / FirebaseAuth /
+/// network calls might fail.
+///
+///   try {
+///     await FirebaseFirestore.instance.collection('x').doc(id).update(...);
+///   } catch (e) {
+///     showAppError(context, e);
+///   }
+String _errorMessageFor(Object error) {
+  if (error is FirebaseException) {
+    switch (error.code) {
+      case 'permission-denied':
+        return tr('אין הרשאה לפעולה זו', "You don't have permission for this action");
+      case 'unavailable':
+      case 'network-request-failed':
+        return tr('בעיית חיבור — נסה שוב', 'Connection error — try again');
+      case 'not-found':
+        return tr('הפריט לא נמצא', 'Item not found');
+      case 'cancelled':
+      case 'aborted':
+        return tr('הפעולה בוטלה — נסה שוב', 'Action cancelled — try again');
+      case 'deadline-exceeded':
+      case 'resource-exhausted':
+        return tr('בעיית חיבור — נסה שוב', 'Connection error — try again');
+      case 'already-exists':
+        return tr('הפריט כבר קיים', 'Item already exists');
+      case 'unauthenticated':
+        return tr('יש להתחבר מחדש', 'Please sign in again');
+    }
+  }
+  if (error is FirebaseAuthException) {
+    switch (error.code) {
+      case 'wrong-password':
+      case 'invalid-credential':
+        return tr('סיסמה שגויה', 'Wrong password');
+      case 'user-not-found':
+        return tr('משתמש לא נמצא', 'User not found');
+      case 'email-already-in-use':
+        return tr('האימייל כבר רשום במערכת', 'Email already registered');
+      case 'weak-password':
+        return tr('סיסמה חלשה — מינימום 6 תווים', 'Weak password — min 6 chars');
+      case 'invalid-email':
+        return tr('אימייל לא תקין', 'Invalid email');
+      case 'too-many-requests':
+        return tr('יותר מדי ניסיונות — נסה שוב מאוחר יותר', 'Too many attempts — try later');
+      case 'network-request-failed':
+        return tr('בעיית חיבור — נסה שוב', 'Connection error — try again');
+    }
+  }
+  if (error is TimeoutException) {
+    return tr('בעיית חיבור — נסה שוב', 'Connection error — try again');
+  }
+  return tr('שגיאה — אנא רענן את הדף', 'Error — please refresh');
+}
+
+void showAppError(BuildContext context, Object error) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text(_errorMessageFor(error)),
+    backgroundColor: colorError,
+    duration: const Duration(seconds: 3),
+  ));
+}
+
 // ==================== AUTH HELPERS ====================
 Future<void> _signOut([BuildContext? context]) async {
   await FirebaseAuth.instance.signOut();
@@ -5540,39 +5606,76 @@ class _BookingScreenState extends State<BookingScreen> {
     final myName = user?.displayName ?? user?.email ?? '';
     final date = _days[_selDay]['date']!;
 
-    final existing = await FirebaseFirestore.instance.collection('bookings').where('stadiumName', isEqualTo: widget.stadium['name']).where('date', isEqualTo: date).where('time', isEqualTo: label).get();
-    if (existing.docs.isNotEmpty) {
+    // Pre-flight checks (transactions can only do .get() on specific docs,
+    // not queries — so these query-based safety checks live outside the txn):
+    //   1) Slot-taken via legacy booking (any old random-ID doc in this slot)
+    //   2) User has another booking at this same time on any stadium
+    try {
+      final stadiumName = (widget.stadium['name'] as String?) ?? '';
+      final results = await Future.wait([
+        FirebaseFirestore.instance
+            .collection('bookings')
+            .where('stadiumName', isEqualTo: stadiumName)
+            .where('date', isEqualTo: date)
+            .where('time', isEqualTo: label)
+            .get(),
+        FirebaseFirestore.instance
+            .collection('bookings')
+            .where('userId', isEqualTo: user?.uid)
+            .where('date', isEqualTo: date)
+            .where('time', isEqualTo: label)
+            .get(),
+      ]);
+      final slotExisting = results[0];
+      final userExisting = results[1];
+      if (slotExisting.docs.isNotEmpty) {
+        setState(() { _booking = false; });
+        if (context.mounted) _dlg(
+          tr('שעה תפוסה ❌', 'Slot Taken ❌'),
+          tr('$label כבר תפוס. בחר שעה אחרת.', '$label is already booked.'),
+          err: true,
+        );
+        return;
+      }
+      if (userExisting.docs.isNotEmpty) {
+        setState(() { _booking = false; });
+        final otherStadium = (userExisting.docs.first.data()['stadiumName'] as String?) ?? '';
+        if (context.mounted) _dlg(
+          tr('כבר הזמנת ❌', 'Already Booked ❌'),
+          tr('כבר יש לך הזמנה באותה שעה ב-$otherStadium',
+             'You already have a booking at this time at $otherStadium'),
+          err: true,
+        );
+        return;
+      }
+    } catch (e) {
       setState(() { _booking = false; });
-      if (context.mounted) _dlg(tr('שעה תפוסה ❌','Slot Taken ❌'), tr('$label כבר תפוס. בחר שעה אחרת.','$label is already booked.'), err: true);
-      return;
-    }
-
-    final userExisting = await FirebaseFirestore.instance
-        .collection('bookings')
-        .where('userId', isEqualTo: user?.uid)
-        .where('date', isEqualTo: date)
-        .where('time', isEqualTo: label)
-        .get();
-    if (userExisting.docs.isNotEmpty) {
-      setState(() { _booking = false; });
-      final otherStadium = userExisting.docs.first.data()['stadiumName'];
-      if (context.mounted) _dlg(
-        tr('כבר הזמנת ❌', 'Already Booked ❌'),
-        tr('כבר יש לך הזמנה באותה שעה ב-$otherStadium',
-           'You already have a booking at this time at $otherStadium'),
-        err: true,
-      );
+      if (context.mounted) showAppError(context, e);
       return;
     }
 
     final code = (1000 + DateTime.now().millisecondsSinceEpoch % 9000).toString();
     final typePrice = _selectedType?['price'] ?? widget.stadium['price'];
-    await FirebaseFirestore.instance.collection('bookings').add({
-      'userId': user?.uid, 'userName': myName,
-      'stadiumName': widget.stadium['name'], 'stadiumId': widget.stadium['id'],
-      'day': _days[_selDay]['name'], 'date': date, 'time': label,
+
+    // Atomic slot reservation via transaction. We use a deterministic doc ID
+    // ({stadiumId}_{date}_{startTime}) so the bookings collection structurally
+    // enforces "one booking per slot" — even if two users tap CONFIRM at the
+    // exact same millisecond, only one transaction wins.
+    final startTime = (_visibleSlots[_selSlot!])['start']!;
+    final slotKey   = '${widget.stadium['id']}_${date.replaceAll('/', '-')}_$startTime';
+    final bookingRef = FirebaseFirestore.instance.collection('bookings').doc(slotKey);
+
+    final bookingData = <String, dynamic>{
+      'userId': user?.uid ?? '',
+      'userName': myName,
+      'stadiumName': widget.stadium['name'] ?? '',
+      'stadiumId': widget.stadium['id'] ?? '',
+      'day': _days[_selDay]['name'] ?? '',
+      'date': date,
+      'time': label,
       'price': '₪$typePrice/2hr',
-      'bookingCode': code, 'players': [myName],
+      'bookingCode': code,
+      'players': [myName],
       'createdAt': DateTime.now().toIso8601String(),
       if (_selectedType != null) ...{
         'bookingType':      _selectedType!['name']   ?? '',
@@ -5580,13 +5683,40 @@ class _BookingScreenState extends State<BookingScreen> {
         'bookingTypeIcon':  _selectedType!['icon']   ?? '',
         'bookingTypeColor': _selectedType!['color']  ?? '',
       },
-    });
-    await FirebaseFirestore.instance.collection('notifications').add({
-      'userId': user?.uid,
-      'title': tr('ההזמנה אושרה ✅','Booking Confirmed ✅'),
-      'body': tr('ההזמנה שלך ב-${widget.stadium['name']} ב-${_days[_selDay]['name']} $date • $label', 'Your booking at ${widget.stadium['name']} on ${_days[_selDay]['name']} $date • $label'),
-      'read': false, 'createdAt': DateTime.now().toIso8601String(),
-    });
+    };
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((txn) async {
+        final snap = await txn.get(bookingRef);
+        if (snap.exists) {
+          // Another user grabbed this slot in the same millisecond — bail.
+          throw FirebaseException(plugin: 'cloud_firestore', code: 'already-exists');
+        }
+        txn.set(bookingRef, bookingData);
+      });
+    } catch (e) {
+      setState(() { _booking = false; });
+      if (e is FirebaseException && e.code == 'already-exists') {
+        if (context.mounted) _dlg(
+          tr('שעה תפוסה ❌', 'Slot Taken ❌'),
+          tr('$label כבר תפוס. בחר שעה אחרת.', '$label is already booked.'),
+          err: true,
+        );
+      } else if (context.mounted) {
+        showAppError(context, e);
+      }
+      return;
+    }
+
+    // Best-effort notification — failure here doesn't roll back the booking.
+    try {
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'userId': user?.uid,
+        'title': tr('ההזמנה אושרה ✅','Booking Confirmed ✅'),
+        'body': tr('ההזמנה שלך ב-${widget.stadium['name']} ב-${_days[_selDay]['name']} $date • $label', 'Your booking at ${widget.stadium['name']} on ${_days[_selDay]['name']} $date • $label'),
+        'read': false, 'createdAt': DateTime.now().toIso8601String(),
+      });
+    } catch (_) {/* non-critical */}
 
     await _loadData();
     setState(() { _booking = false; _selSlot = null; });
