@@ -22,21 +22,25 @@ const String superAdminEmail    = 'admin@gmail.com';
 const String md9AdminEmail      = 'admin.md9@gmail.com';
 const String yStadiumAdminEmail = 'admin.ystadium@gmail.com';
 
+/// Hard-coded fallback contact email shown on the Contact screen when the
+/// `app_config/contact` doc is missing, empty, or unreadable.
+const String kDefaultContactEmail = 'MANSOURSHADY69@gmail.com';
+
 const List<Map<String, dynamic>> allStadiums = [
-  {'id': 'md9_main',  'name': 'MD9 MAIN',  'type': 'Football', 'price': 300, 'location': 'נצרת', 'admin': md9AdminEmail},
-  {'id': 'md9_2',     'name': 'MD9 2',     'type': 'Football', 'price': 300, 'location': 'נצרת', 'admin': md9AdminEmail},
-  {'id': 'y_stadium', 'name': 'Y STADIUM', 'type': 'Football', 'price': 300, 'location': 'נצרת', 'admin': yStadiumAdminEmail},
+  {'id': 'md9_main',  'name': 'SM MAIN',   'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
+  {'id': 'md9_2',     'name': 'SM 2',      'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
+  {'id': 'y_stadium', 'name': 'X STADIUM', 'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': yStadiumAdminEmail},
 ];
 
 final List<Map<String, dynamic>> venues = [
   {
-    'id': 'md9', 'name': 'MD9', 'nameEn': 'MD9',
+    'id': 'md9', 'name': 'SM', 'nameEn': 'SM',
     'region': 'נצרת', 'regionEn': 'Nazareth',
     'description': 'מרכז כדורגל מקצועי בנצרת', 'descriptionEn': 'Professional football center in Nazareth',
     'color': 'green', 'stadiumIds': ['md9_main', 'md9_2'], 'hasTraining': true,
   },
   {
-    'id': 'y_stadium', 'name': 'Y STADIUM', 'nameEn': 'Y STADIUM',
+    'id': 'y_stadium', 'name': 'X STADIUM', 'nameEn': 'X STADIUM',
     'region': 'נצרת', 'regionEn': 'Nazareth',
     'description': 'אצטדיון כדורגל מקצועי בנצרת', 'descriptionEn': 'Professional football stadium in Nazareth',
     'color': 'blue', 'stadiumIds': ['y_stadium'], 'hasTraining': false,
@@ -180,6 +184,11 @@ Color _colorForType(String? color) {
     default:       return accentGreen;
   }
 }
+/// Default slot length in minutes. Used when an admin hasn't customised the
+/// schedule for a given day. Stored alongside per-day overrides as
+/// `slotDurationMinutes` in `admin_schedule/{stadiumId_date}`.
+const int kDefaultSlotMinutes = 120;
+
 final List<Map<String, String>> defaultSlots = [
   {'start': '08:00', 'end': '10:00'},
   {'start': '10:00', 'end': '12:00'},
@@ -198,12 +207,66 @@ final List<String> allStartTimes = [
   '20:00','20:30','21:00','21:30','22:00','22:30','23:00','23:30',
 ];
 
-String _addTwoHours(String start) {
-  final parts = start.split(':');
-  int h = int.parse(parts[0]) + 2;
-  if (h >= 24) h -= 24;
-  return '${h.toString().padLeft(2,'0')}:${parts[1]}';
+/// Convert "HH:mm" to minutes since midnight. "00:00" stays 0; use
+/// [_slotDurationMinutes] when you need to treat 00:00 as end-of-day.
+int _toMinutesStr(String t) {
+  final p = t.split(':');
+  return int.parse(p[0]) * 60 + int.parse(p[1]);
 }
+
+/// Add `durationMinutes` to a "HH:mm" string, wrapping around midnight.
+/// 23:30 + 60 → "00:30", 22:00 + 120 → "00:00".
+String _addMinutes(String start, int durationMinutes) {
+  final total = (_toMinutesStr(start) + durationMinutes) % (24 * 60);
+  final h = total ~/ 60;
+  final m = total % 60;
+  return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+}
+
+/// Returns the duration (in minutes) between two "HH:mm" times. Treats
+/// "00:00" as end-of-day when it appears as the end time, so 22:00→00:00
+/// returns 120 (not -1320).
+int _slotDurationMinutes(String start, String end) {
+  final s = _toMinutesStr(start);
+  var e = _toMinutesStr(end);
+  if (e <= s) e += 24 * 60;
+  return e - s;
+}
+
+/// Compute the price for a slot of [durationMinutes] at [pricePerHour].
+/// Rounds to the nearest integer shekel.
+int _priceForSlot(int pricePerHour, int durationMinutes) {
+  return (pricePerHour * durationMinutes / 60).round();
+}
+
+/// Format a price label like "₪225/1.5h" or "₪300/2h". Whole-hour
+/// durations drop the trailing ".0".
+String _priceLabel(int price, int durationMinutes) {
+  final hours = durationMinutes / 60;
+  final hoursStr = hours == hours.truncateToDouble()
+      ? hours.toInt().toString()
+      : hours.toStringAsFixed(1);
+  return '₪$price/${hoursStr}h';
+}
+
+/// Build a schedule of fixed-length slots starting at 08:00 and ending
+/// when the next slot would extend past midnight. Mirrors the layout
+/// of [defaultSlots] but for any duration (60 / 90 / 120…).
+List<Map<String, String>> buildDefaultSlots(int durationMinutes) {
+  final slots = <Map<String, String>>[];
+  var cursor = 8 * 60; // 08:00
+  const endOfDay = 24 * 60;
+  while (cursor + durationMinutes <= endOfDay) {
+    final start = '${(cursor ~/ 60).toString().padLeft(2, '0')}:${(cursor % 60).toString().padLeft(2, '0')}';
+    final end = _addMinutes(start, durationMinutes);
+    slots.add({'start': start, 'end': end});
+    cursor += durationMinutes;
+  }
+  return slots;
+}
+
+/// Backward-compat shim: existing call sites use this for the +2h default.
+String _addTwoHours(String start) => _addMinutes(start, 120);
 
 String _slotLabel(Map<String, String> slot) => '${slot['start']} - ${slot['end']}';
 
@@ -932,7 +995,13 @@ Future<String> _fetchPhone(String? userId) async {
 
 // ==================== BOOKING DETAILS DIALOG ====================
 void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdmin = false, String? docId}) async {
-  String phone = await _fetchPhone(b['userId'] as String?);
+  // Prefer the phone embedded on the booking doc itself (manual bookings
+  // and bookings created by _book() store it). Fall back to the user's
+  // profile only when the booking doesn't carry one.
+  String phone = (b['phone'] as String?)?.trim() ?? '';
+  if (phone.isEmpty) {
+    phone = await _fetchPhone(b['userId'] as String?);
+  }
   final players = (b['players'] as List?)??[];
   if (!context.mounted) return;
 
@@ -959,10 +1028,37 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
       _detailRow(Icons.access_time_outlined, tr('שעה','Time'), b['time']??''),
       _detailRow(Icons.attach_money, tr('מחיר','Price'), b['price']??''),
       _detailRow(Icons.person_outline, tr('מארגן','Organizer'), b['userName']??''),
-      if (phone.isNotEmpty) GestureDetector(
-        onTap: () => Clipboard.setData(ClipboardData(text: phone)),
-        child: _detailRow(Icons.phone_outlined, tr('טלפון','Phone'), '$phone 📋'),
-      ),
+      if (phone.isNotEmpty)
+        GestureDetector(
+          onTap: () async {
+            await Clipboard.setData(ClipboardData(text: phone));
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(tr('הטלפון הועתק 📋', 'Phone copied 📋')),
+                backgroundColor: accentGreen,
+                duration: const Duration(seconds: 2),
+              ));
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.phone_outlined, color: accentGreen, size: 16),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text('${tr('טלפון','Phone')}: ',
+                  style: const TextStyle(color: textSecondary, fontSize: 13),
+                  overflow: TextOverflow.ellipsis),
+              ),
+              Expanded(
+                child: Text(phone,
+                  style: const TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                  overflow: TextOverflow.ellipsis, maxLines: 1),
+              ),
+              const Icon(Icons.copy_outlined, color: accentGreen, size: 14),
+            ]),
+          ),
+        ),
       _detailRow(Icons.tag, tr('קוד','Code'), b['bookingCode']??''),
       const SizedBox(height: 12),
       const Divider(color: borderColor), const SizedBox(height: 8),
@@ -2333,6 +2429,19 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
           label: Text(tr('ייצוא כל ההזמנות לExcel', 'Export All to Excel')),
           style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(vertical: 12)),
         )),
+        const SizedBox(height: 16),
+        SizedBox(width: double.infinity, child: OutlinedButton.icon(
+          onPressed: () => navigateTo(context, const AppContactConfigScreen()),
+          icon: const Icon(Icons.contact_support_outlined, size: 18, color: Colors.amber),
+          label: Text(tr('ערוך פרטי קשר אפליקציה', 'Edit App Contact Info'),
+            style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.w800)),
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: Colors.amber.withValues(alpha: 0.4)),
+            backgroundColor: cardColor,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+          ),
+        )),
         const SizedBox(height: 24), _secTitle(tr('ביצועי מגרשים', 'STADIUMS')), const SizedBox(height: 12),
         ...allStadiums.map((s) => _perfCard(s['name'], sCount[s['name']] ?? 0, sRev[s['name']] ?? 0)),
       ]);
@@ -2576,15 +2685,15 @@ class _MD9AdminScreenState extends State<MD9AdminScreen> with SingleTickerProvid
       title: Row(children: [
         const Icon(Icons.shield_outlined, color: Colors.amber, size: 20),
         const SizedBox(width: 8),
-        Text(tr('אדמין MD9', 'MD9 ADMIN'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2)),
+        Text(tr('אדמין SM', 'SM ADMIN'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2)),
       ]),
       bottom: TabBar(controller: _tab, indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
-        tabs: [Tab(text: tr('סקירה', 'DASHBOARD')), const Tab(text: 'MD9 MAIN'), const Tab(text: 'MD9 2')]),
+        tabs: [Tab(text: tr('סקירה', 'DASHBOARD')), const Tab(text: 'SM MAIN'), const Tab(text: 'SM 2')]),
     ),
     body: TabBarView(controller: _tab, children: const [
       MD9OverviewTab(),
-      AdminStadiumTab(stadiumName: 'MD9 MAIN', stadiumId: 'md9_main', price: 300),
-      AdminStadiumTab(stadiumName: 'MD9 2',    stadiumId: 'md9_2',    price: 300),
+      AdminStadiumTab(stadiumName: 'SM MAIN', stadiumId: 'md9_main', price: 300),
+      AdminStadiumTab(stadiumName: 'SM 2',    stadiumId: 'md9_2',    price: 300),
     ]),
   );
 }
@@ -2610,7 +2719,7 @@ class MD9OverviewTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder(
-      stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', whereIn: ['MD9 MAIN', 'MD9 2']).snapshots(),
+      stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', whereIn: ['SM MAIN', 'SM 2']).snapshots(),
       builder: (context, snap) {
         if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
 
@@ -2625,8 +2734,8 @@ class MD9OverviewTab extends StatelessWidget {
         int todayBookings = 0, todayPlayers = 0, todayRevenue = 0;
         // Per-stadium today
         final perStadium = <String, Map<String, int>>{
-          'MD9 MAIN': {'b': 0, 'p': 0, 'r': 0},
-          'MD9 2':    {'b': 0, 'p': 0, 'r': 0},
+          'SM MAIN': {'b': 0, 'p': 0, 'r': 0},
+          'SM 2':    {'b': 0, 'p': 0, 'r': 0},
         };
         // ---- Week aggregates ----
         int weekBookings = 0, weekRevenue = 0;
@@ -2730,9 +2839,9 @@ class MD9OverviewTab extends StatelessWidget {
           // ===== Per-stadium snapshot =====
           _secTitle(tr('פעילות לפי מגרש — היום', 'BY STADIUM — TODAY')),
           const SizedBox(height: spaceSm),
-          _stadiumCard('MD9 MAIN', perStadium['MD9 MAIN']!),
+          _stadiumCard('SM MAIN', perStadium['SM MAIN']!),
           const SizedBox(height: spaceXs),
-          _stadiumCard('MD9 2', perStadium['MD9 2']!),
+          _stadiumCard('SM 2', perStadium['SM 2']!),
 
           const SizedBox(height: spaceLg),
 
@@ -2799,10 +2908,10 @@ class MD9OverviewTab extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () => navigateTo(context, const VenueImageScreen(venueId: 'md9', venueName: 'MD9')),
+              onPressed: () => navigateTo(context, const VenueImageScreen(venueId: 'md9', venueName: 'SM')),
               icon: const Icon(Icons.image_outlined, size: 18, color: Colors.purple),
               label: Text(
-                tr('תמונת רקע למתחם MD9', 'MD9 Venue Background Image'),
+                tr('תמונת רקע למתחם SM', 'SM Venue Background Image'),
                 style: const TextStyle(color: Colors.purple, fontSize: 13, fontWeight: FontWeight.w800),
               ),
               style: OutlinedButton.styleFrom(
@@ -2822,7 +2931,7 @@ class MD9OverviewTab extends StatelessWidget {
               onPressed: () => exportToCSV(context, allBookings, 'md9_bookings'),
               icon: const Icon(Icons.download_outlined, size: 18, color: accentGreen),
               label: Text(
-                tr('ייצוא כל הזמנות MD9', 'Export All MD9 Bookings'),
+                tr('ייצוא כל הזמנות SM', 'Export All SM Bookings'),
                 style: const TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w800),
               ),
               style: OutlinedButton.styleFrom(
@@ -3006,7 +3115,37 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       final raw = schedData['slots'] as List;
       return raw.map((s) => {'start': s['start'] as String, 'end': s['end'] as String}).toList();
     }
+    if (schedData != null && schedData['slotDurationMinutes'] != null) {
+      return buildDefaultSlots(schedData['slotDurationMinutes'] as int);
+    }
     return List.from(defaultSlots);
+  }
+
+  Future<void> _setDayDuration(int durationMinutes, bool hasBookedSlots) async {
+    if (hasBookedSlots) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('לא ניתן לשנות אורך משבצות כשיש הזמנות', 'Cannot change slot length while bookings exist')),
+          backgroundColor: colorError,
+        ));
+      }
+      return;
+    }
+    try {
+      final newSlots = buildDefaultSlots(durationMinutes);
+      await FirebaseFirestore.instance.collection('admin_schedule').doc(_docId).set({
+        'slots': newSlots.map((s) => {'start': s['start'], 'end': s['end']}).toList(),
+        'slotDurationMinutes': durationMinutes,
+      }, SetOptions(merge: true));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('אורך המשבצות עודכן ל-$durationMinutes דקות ✓', 'Slot length set to $durationMinutes min ✓')),
+          backgroundColor: accentGreen,
+        ));
+      }
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    }
   }
 
   // Converts "HH:mm" to minutes since midnight for comparison
@@ -3838,6 +3977,21 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             const SizedBox(height: 10),
             Row(children: [
               _secTitle('${tr('לוח זמנים', 'SCHEDULE')} — ${_days[_selDay]['date']}'), const Spacer(),
+              PopupMenuButton<int>(
+                tooltip: tr('אורך משבצת', 'Slot length'),
+                icon: const Icon(Icons.schedule, color: textSecondary, size: 18),
+                color: cardColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(radiusLg),
+                  side: const BorderSide(color: borderColor),
+                ),
+                itemBuilder: (_) => [
+                  PopupMenuItem<int>(value: 60,  child: Text(tr('60 דקות', '60 min'),   style: const TextStyle(color: textPrimary, fontSize: 13))),
+                  PopupMenuItem<int>(value: 90,  child: Text(tr('90 דקות', '90 min'),   style: const TextStyle(color: textPrimary, fontSize: 13))),
+                  PopupMenuItem<int>(value: 120, child: Text(tr('120 דקות', '120 min'), style: const TextStyle(color: textPrimary, fontSize: 13))),
+                ],
+                onSelected: (mins) => _setDayDuration(mins, bookedLabels.isNotEmpty),
+              ),
               if (schedData != null && schedData['slots'] != null)
                 TextButton(onPressed: _resetDay, child: Text(tr('איפוס', 'RESET'), style: const TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w900))),
             ]),
@@ -5365,7 +5519,7 @@ class StadiumCard extends StatelessWidget {
                     ),
                   )),
                 Positioned(top: 12, left: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: bgColor.withValues(alpha: 0.8), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.5))), child: Text(stadium['type'], style: const TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.bold)))),
-                Positioned(top: 12, right: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(8)), child: Text('₪${stadium['price']}/2hr', style: const TextStyle(color: bgColor, fontSize: 11, fontWeight: FontWeight.w900)))),
+                Positioned(top: 12, right: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(8)), child: Text(stadium['pricePerHour'] != null ? '₪${stadium['pricePerHour']}/${tr('שעה', 'hr')}' : '₪${stadium['price']}/2hr', style: const TextStyle(color: bgColor, fontSize: 11, fontWeight: FontWeight.w900)))),
               ]),
             );
           },
@@ -5654,26 +5808,41 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
 
+    String userPhone = '';
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(user?.uid).get();
+      userPhone = (userDoc.data()?['phone'] as String?) ?? '';
+    } catch (_) {}
+
     final code = (1000 + DateTime.now().millisecondsSinceEpoch % 9000).toString();
-    final typePrice = _selectedType?['price'] ?? widget.stadium['price'];
+    final bookedSlot = _visibleSlots[_selSlot!];
+    final durationMins = _slotDurationMinutes(bookedSlot['start']!, bookedSlot['end']!);
+    final stadiumPricePerHour = (widget.stadium['pricePerHour'] as int?)
+        ?? (((widget.stadium['price'] as int?) ?? 300) ~/ 2);
+    final typeRatePerHour = (_selectedType?['pricePerHour'] as int?)
+        ?? (((_selectedType?['price'] as int?) ?? stadiumPricePerHour * 2) ~/ 2);
+    final typePrice = _priceForSlot(typeRatePerHour, durationMins);
 
     // Atomic slot reservation via transaction. We use a deterministic doc ID
     // ({stadiumId}_{date}_{startTime}) so the bookings collection structurally
     // enforces "one booking per slot" — even if two users tap CONFIRM at the
     // exact same millisecond, only one transaction wins.
-    final startTime = (_visibleSlots[_selSlot!])['start']!;
+    final startTime = bookedSlot['start']!;
     final slotKey   = '${widget.stadium['id']}_${date.replaceAll('/', '-')}_$startTime';
     final bookingRef = FirebaseFirestore.instance.collection('bookings').doc(slotKey);
 
     final bookingData = <String, dynamic>{
       'userId': user?.uid ?? '',
       'userName': myName,
+      'phone': userPhone,
       'stadiumName': widget.stadium['name'] ?? '',
       'stadiumId': widget.stadium['id'] ?? '',
       'day': _days[_selDay]['name'] ?? '',
       'date': date,
       'time': label,
-      'price': '₪$typePrice/2hr',
+      'price': _priceLabel(typePrice, durationMins),
+      'priceAmount': typePrice,
+      'durationMinutes': durationMins,
       'bookingCode': code,
       'players': [myName],
       'createdAt': DateTime.now().toIso8601String(),
@@ -6500,6 +6669,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 10),
                 _menuItem(Icons.calendar_month_outlined, tr('הלוח זמנים שלי', 'My Schedule'), accentGreen,
                     () => navigateTo(context, const MyBookingsScreen())),
+                const SizedBox(height: 10),
+                _menuItem(Icons.contact_support_outlined, tr('צור קשר', 'Contact Us'), Colors.amber,
+                    () => navigateTo(context, const ContactScreen())),
                 const SizedBox(height: 10),
                 _menuItem(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red, () => _signOut(context)),
               ],
@@ -8586,6 +8758,274 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
   }
 }
 
+// ==================== CONTACT (USER) ====================
+class ContactScreen extends StatelessWidget {
+  const ContactScreen({super.key});
+
+  Future<void> _copyToClipboard(BuildContext context, String value, String label) async {
+    if (value.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('$label הועתק 📋', '$label copied 📋')),
+      backgroundColor: accentGreen,
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: PlayerAppBar(title: tr('צור קשר', 'CONTACT US')),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('app_config').doc('contact').snapshots(),
+        builder: (ctx, snap) {
+          // Show the loader only while the very first snapshot is in flight.
+          // If permissions are denied or the doc is missing, fall through to
+          // the default contact card with the hard-coded email — never hang.
+          if (snap.connectionState == ConnectionState.waiting && !snap.hasError) {
+            return const Center(child: CircularProgressIndicator(color: accentGreen));
+          }
+          final hasDoc = snap.hasData && snap.data!.exists;
+          final data = hasDoc ? (snap.data!.data() ?? <String, dynamic>{}) : <String, dynamic>{};
+          final name  = (data['name']  as String?) ?? '';
+          var   email = (data['email'] as String?)?.trim() ?? '';
+          final phone = (data['phone'] as String?) ?? '';
+          final note  = (data['note']  as String?) ?? '';
+          // Always show at least the default email so the user has a way to
+          // reach support, even if the doc is unset / unreadable.
+          if (email.isEmpty) email = kDefaultContactEmail;
+          return ListView(padding: const EdgeInsets.all(spaceMd), children: [
+            Container(
+              padding: const EdgeInsets.all(spaceLg),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.amber.withValues(alpha: 0.18), Colors.amber.withValues(alpha: 0.04)],
+                  begin: Alignment.topLeft, end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(radiusXl),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.25)),
+              ),
+              child: Row(children: [
+                Container(
+                  width: 56, height: 56,
+                  decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
+                  child: const Icon(Icons.support_agent_rounded, color: Colors.amber, size: 28),
+                ),
+                const SizedBox(width: spaceMd),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(tr('צור קשר', 'CONTACT'), style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 2)),
+                  const SizedBox(height: 4),
+                  Text(tr('פרטי הקשר שלנו', 'Our contact details'), style: const TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900)),
+                ])),
+              ]),
+            ),
+            const SizedBox(height: spaceMd),
+            if (name.isNotEmpty) ...[
+              appListTile(icon: Icons.person_outline, title: tr('שם', 'Name'), subtitle: name, iconColor: accentGreen),
+              const SizedBox(height: spaceSm),
+            ],
+            if (email.isNotEmpty) ...[
+              appListTile(
+                icon: Icons.email_outlined,
+                title: tr('אימייל', 'Email'),
+                subtitle: email,
+                iconColor: Colors.blue,
+                trailing: const Icon(Icons.copy_outlined, color: Colors.blue, size: 16),
+                onTap: () => _copyToClipboard(context, email, tr('האימייל', 'Email')),
+              ),
+              const SizedBox(height: spaceSm),
+            ],
+            if (phone.isNotEmpty) ...[
+              appListTile(
+                icon: Icons.phone_outlined,
+                title: tr('טלפון', 'Phone'),
+                subtitle: phone,
+                iconColor: Colors.green,
+                trailing: const Icon(Icons.copy_outlined, color: Colors.green, size: 16),
+                onTap: () => _copyToClipboard(context, phone, tr('הטלפון', 'Phone')),
+              ),
+              const SizedBox(height: spaceSm),
+            ],
+            if (note.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.all(spaceMd),
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  borderRadius: BorderRadius.circular(radiusLg),
+                  border: Border.all(color: borderColor),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(tr('הערה', 'Note'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+                  const SizedBox(height: 6),
+                  Text(note, style: const TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
+                ]),
+              ),
+          ]);
+        },
+      ),
+    );
+  }
+}
+
+// ==================== CONTACT CONFIG (SUPER ADMIN) ====================
+class AppContactConfigScreen extends StatefulWidget {
+  const AppContactConfigScreen({super.key});
+
+  @override
+  State<AppContactConfigScreen> createState() => _AppContactConfigScreenState();
+}
+
+class _AppContactConfigScreenState extends State<AppContactConfigScreen> {
+  final _formKey  = GlobalKey<FormState>();
+  final _nameCtrl  = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _noteCtrl  = TextEditingController();
+  bool _loading = true;
+  bool _saving  = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('app_config').doc('contact').get();
+      if (doc.exists) {
+        final d = doc.data() ?? <String, dynamic>{};
+        _nameCtrl.text  = (d['name']  as String?) ?? '';
+        _emailCtrl.text = (d['email'] as String?) ?? '';
+        _phoneCtrl.text = (d['phone'] as String?) ?? '';
+        _noteCtrl.text  = (d['note']  as String?) ?? '';
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      await FirebaseFirestore.instance.collection('app_config').doc('contact').set({
+        'name':  _nameCtrl.text.trim(),
+        'email': _emailCtrl.text.trim(),
+        'phone': _phoneCtrl.text.trim(),
+        'note':  _noteCtrl.text.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('פרטי הקשר נשמרו ✓', 'Contact details saved ✓')),
+        backgroundColor: accentGreen,
+      ));
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final isMobile = width < 700;
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: AdminAppBar(
+        title: Text(
+          tr('ערוך פרטי קשר', 'Edit Contact Info'),
+          style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 1, fontSize: 16),
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: accentGreen))
+          : SafeArea(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? spaceMd : spaceXl,
+                    vertical: spaceLg,
+                  ),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 440),
+                    child: Form(
+                      key: _formKey,
+                      child: Container(
+                        padding: const EdgeInsets.all(spaceLg),
+                        decoration: BoxDecoration(
+                          color: cardColor,
+                          borderRadius: BorderRadius.circular(radiusXl),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            appTextField(
+                              controller: _nameCtrl,
+                              label: tr('שם', 'Name'),
+                              icon: Icons.person_outline,
+                            ),
+                            const SizedBox(height: spaceMd),
+                            appTextField(
+                              controller: _emailCtrl,
+                              label: tr('אימייל', 'Email'),
+                              icon: Icons.email_outlined,
+                              keyboardType: TextInputType.emailAddress,
+                            ),
+                            const SizedBox(height: spaceMd),
+                            appTextField(
+                              controller: _phoneCtrl,
+                              label: tr('טלפון', 'Phone'),
+                              icon: Icons.phone_outlined,
+                              keyboardType: TextInputType.phone,
+                            ),
+                            const SizedBox(height: spaceMd),
+                            TextFormField(
+                              controller: _noteCtrl,
+                              maxLines: 4,
+                              style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                              decoration: InputDecoration(
+                                labelText: tr('הערה', 'Note'),
+                                labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                                filled: true,
+                                fillColor: cardColor,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+                              ),
+                            ),
+                            const SizedBox(height: spaceLg),
+                            appPrimaryButton(
+                              label: _saving ? tr('שומר...', 'Saving...') : tr('שמור', 'Save'),
+                              icon: _saving ? null : Icons.save_outlined,
+                              onPressed: _saving ? null : _save,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
+}
+
 // ==================== HELPERS ====================
 AppBar _appBar(String t, BuildContext context) => AppBar(
   backgroundColor: bgColor, elevation: 0, iconTheme: const IconThemeData(color: textSecondary),
@@ -8694,6 +9134,10 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
             ),
             const PopupMenuDivider(),
             PopupMenuItem<String>(
+              value: 'contact',
+              child: _menuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), Colors.amber),
+            ),
+            PopupMenuItem<String>(
               value: 'language',
               child: _menuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
             ),
@@ -8710,6 +9154,9 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
                 break;
               case 'bookings':
                 navigateTo(context, const MyBookingsScreen(),);
+                break;
+              case 'contact':
+                navigateTo(context, const ContactScreen());
                 break;
               case 'language':
                 toggleAppLanguage(context);
@@ -8803,26 +9250,44 @@ class _AdminAppBarState extends State<AdminAppBar> {
             side: const BorderSide(color: borderColor),
           ),
           offset: const Offset(0, 48),
-          itemBuilder: (ctx) => [
-            PopupMenuItem<String>(
-              value: 'profile',
-              child: _adminMenuRow(Icons.person_outline, tr('הפרופיל שלי', 'My Profile'), accentGreen),
-            ),
-            const PopupMenuDivider(),
-            PopupMenuItem<String>(
-              value: 'language',
-              child: _adminMenuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
-            ),
-            const PopupMenuDivider(),
-            PopupMenuItem<String>(
-              value: 'logout',
-              child: _adminMenuRow(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red),
-            ),
-          ],
+          itemBuilder: (ctx) {
+            final isSuperAdmin = FirebaseAuth.instance.currentUser?.email == superAdminEmail;
+            return [
+              PopupMenuItem<String>(
+                value: 'profile',
+                child: _adminMenuRow(Icons.person_outline, tr('הפרופיל שלי', 'My Profile'), accentGreen),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'contact',
+                child: _adminMenuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), Colors.amber),
+              ),
+              if (isSuperAdmin)
+                PopupMenuItem<String>(
+                  value: 'edit_contact',
+                  child: _adminMenuRow(Icons.edit_note_outlined, tr('ערוך פרטי קשר', 'Edit Contact Info'), Colors.purple),
+                ),
+              PopupMenuItem<String>(
+                value: 'language',
+                child: _adminMenuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'logout',
+                child: _adminMenuRow(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red),
+              ),
+            ];
+          },
           onSelected: (value) async {
             switch (value) {
               case 'profile':
                 navigateTo(context, const ProfileScreen());
+                break;
+              case 'contact':
+                navigateTo(context, const ContactScreen());
+                break;
+              case 'edit_contact':
+                navigateTo(context, const AppContactConfigScreen());
                 break;
               case 'language':
                 toggleAppLanguage(context);

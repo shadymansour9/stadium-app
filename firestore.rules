@@ -99,6 +99,13 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // App-wide config (contact details, etc.) - readable by any signed-in
+    // user, writable only by admins.
+    match /app_config/{docId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Default-deny: anything not matched above is rejected.
     match /{document=**} {
       allow read, write: if false;
