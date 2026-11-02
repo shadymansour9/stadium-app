@@ -688,8 +688,8 @@ Widget appScreenHeader(BuildContext context, String title, {String? subtitle, Li
 // ====================================================
 // SECTION TITLE (section header with optional action)
 // ====================================================
-Widget appSectionTitle(String title, {String? action, VoidCallback? onActionTap}) {
-  return Padding(
+Widget appSectionTitle(String title, {String? action, VoidCallback? onActionTap, String? identifier}) {
+  final widget = Padding(
     padding: const EdgeInsets.symmetric(horizontal: spaceXs, vertical: spaceSm),
     child: Row(children: [
       Expanded(
@@ -703,6 +703,9 @@ Widget appSectionTitle(String title, {String? action, VoidCallback? onActionTap}
         ),
     ]),
   );
+  return identifier == null
+      ? widget
+      : Semantics(identifier: identifier, container: true, child: widget);
 }
 
 // ====================================================
@@ -1277,11 +1280,14 @@ Widget _dialogTf(TextEditingController c, String hint, IconData icon, {TextInput
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (kIsWeb) {
-    // Forces the semantics (accessibility) DOM tree to render on web at
-    // startup instead of waiting for a screen reader to be detected. This
-    // is what lets Playwright find elements by role/label/identifier
-    // instead of only seeing a CanvasKit <canvas>.
+  // Forces the semantics (accessibility) DOM tree to render on web at
+  // startup instead of waiting for a screen reader to be detected. This
+  // is what lets Playwright find elements by role/label/identifier
+  // instead of only seeing a CanvasKit <canvas>. Gated behind ?e2e=1:
+  // building that DOM tree on every frame has a real performance cost,
+  // which real users do not need to pay — only E2E test runs opt in by
+  // loading the app with that query param.
+  if (kIsWeb && Uri.base.queryParameters['e2e'] == '1') {
     SemanticsBinding.instance.ensureSemantics();
   }
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -4448,6 +4454,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                             final v = venues[i];
                             return _VenueCard(
                               venue: v,
+                              identifier: 'venue_card_${v['id']}',
                               onTap: () {
                                 Navigator.push(
                                   context,
@@ -4618,8 +4625,9 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
 class _VenueCard extends StatelessWidget {
   final Map<String, dynamic> venue;
   final VoidCallback onTap;
+  final String? identifier;
 
-  const _VenueCard({required this.venue, required this.onTap});
+  const _VenueCard({required this.venue, required this.onTap, this.identifier});
 
   @override
   Widget build(BuildContext context) {
@@ -4630,7 +4638,7 @@ class _VenueCard extends StatelessWidget {
     final region = isHebrew ? (venue['region'] as String? ?? 'נצרת') : (venue['regionEn'] as String? ?? 'Nazareth');
     final description = isHebrew ? (venue['description'] as String? ?? '') : (venue['descriptionEn'] as String? ?? venue['description'] as String? ?? '');
 
-    return InkWell(
+    final card = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(radiusXl),
       child: ClipRRect(
@@ -4662,6 +4670,9 @@ class _VenueCard extends StatelessWidget {
         ),
       ),
     );
+    return identifier == null
+        ? card
+        : Semantics(identifier: identifier, container: true, child: card);
   }
 
   /// Layout used when the venue has a custom background image — image covers
@@ -5025,6 +5036,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
 
     final actions = <Map<String, dynamic>>[
       {
+        'id': 'venue_action_book_a_field',
         'icon': Icons.calendar_month_rounded,
         'title': tr('הזמן מגרש', 'Book a Field'),
         'subtitle': tr('בחר תאריך ושעה', 'Pick date & time'),
@@ -5197,6 +5209,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                               color: action['color'] as Color,
                               onTap: action['onTap'] as VoidCallback,
                               isMobile: isMobile,
+                              identifier: action['id'] as String?,
                             );
                           },
                         ),
@@ -5271,6 +5284,7 @@ class _ActionCard extends StatelessWidget {
   final Color color;
   final VoidCallback onTap;
   final bool isMobile;
+  final String? identifier;
 
   const _ActionCard({
     required this.icon,
@@ -5279,11 +5293,12 @@ class _ActionCard extends StatelessWidget {
     required this.color,
     required this.onTap,
     required this.isMobile,
+    this.identifier,
   });
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final card = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(radiusXl),
       child: Container(
@@ -5385,6 +5400,9 @@ class _ActionCard extends StatelessWidget {
               ),
       ),
     );
+    return identifier == null
+        ? card
+        : Semantics(identifier: identifier, container: true, child: card);
   }
 }
 
@@ -5431,7 +5449,10 @@ class StadiumSelectionScreen extends StatelessWidget {
                       itemCount: stadiums.length,
                       itemBuilder: (ctx, i) {
                         final s = stadiums[i];
-                        return InkWell(
+                        return Semantics(
+                          identifier: 'stadium_card_${s['id']}',
+                          container: true,
+                          child: InkWell(
                           onTap: () {
                             navigateTo(context, BookingScreen(stadium: s),);
                           },
@@ -5493,6 +5514,7 @@ class StadiumSelectionScreen extends StatelessWidget {
                                 ]),
                               ],
                             ),
+                          ),
                           ),
                         );
                       },
@@ -5988,7 +6010,11 @@ class _BookingScreenState extends State<BookingScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        appSectionTitle(tr('בחר תאריך', 'SELECT DATE')),
+                        // Tagged 'booking_screen': always rendered as
+                        // soon as this screen builds, before the async
+                        // Firestore load finishes — a reliable "arrived"
+                        // signal for E2E tests that doesn't wait on data.
+                        appSectionTitle(tr('בחר תאריך', 'SELECT DATE'), identifier: 'booking_screen'),
                         const SizedBox(height: spaceXs),
                         SizedBox(
                           height: 76,
