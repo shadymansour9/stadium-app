@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Firebase CLI deploy-tracking cache — churns on every deploy, not source
+.firebase/
+
+# Standalone test project — lives in its own repo (stadium-e2e-tests)
+/stadium-tests/

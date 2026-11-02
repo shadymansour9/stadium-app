@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert' show base64Decode, base64Encode;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:excel/excel.dart' hide Border;
 import 'package:firebase_storage/firebase_storage.dart';
@@ -422,8 +423,9 @@ Widget appPrimaryButton({
   required String label,
   required VoidCallback? onPressed,
   IconData? icon,
+  String? identifier,
 }) {
-  return SizedBox(
+  final button = SizedBox(
     width: double.infinity,
     height: 52,
     child: ElevatedButton.icon(
@@ -443,6 +445,7 @@ Widget appPrimaryButton({
       ),
     ),
   );
+  return identifier == null ? button : Semantics(identifier: identifier, child: button);
 }
 
 Widget appToolButton({
@@ -605,8 +608,9 @@ Widget appTextField({
   String? Function(String?)? validator,
   VoidCallback? onTap,
   bool readOnly = false,
+  String? identifier,
 }) {
-  return TextFormField(
+  final field = TextFormField(
     controller: controller,
     obscureText: obscure,
     keyboardType: keyboardType,
@@ -641,6 +645,9 @@ Widget appTextField({
       ),
     ),
   );
+  return identifier == null
+      ? field
+      : Semantics(identifier: identifier, container: true, child: field);
 }
 
 // ====================================================
@@ -1270,6 +1277,13 @@ Widget _dialogTf(TextEditingController c, String hint, IconData icon, {TextInput
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    // Forces the semantics (accessibility) DOM tree to render on web at
+    // startup instead of waiting for a screen reader to be detected. This
+    // is what lets Playwright find elements by role/label/identifier
+    // instead of only seeing a CanvasKit <canvas>.
+    SemanticsBinding.instance.ensureSemantics();
+  }
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Offline persistence — must be set before any Firestore call.
@@ -1549,7 +1563,13 @@ class _LoginScreenState extends State<LoginScreen> {
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message ?? 'Login failed'), backgroundColor: colorError),
+          SnackBar(
+            content: Semantics(
+              identifier: 'login_error_message',
+              child: Text(e.message ?? 'Login failed'),
+            ),
+            backgroundColor: colorError,
+          ),
         );
       }
     } finally {
@@ -1825,38 +1845,43 @@ class _LoginScreenState extends State<LoginScreen> {
                             icon: Icons.email_outlined,
                             keyboardType: TextInputType.emailAddress,
                             validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
+                            identifier: 'login_email_field',
                           ),
                           const SizedBox(height: spaceMd),
-                          TextFormField(
-                            controller: _passCtrl,
-                            obscureText: _obscurePass,
-                            style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
-                            validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
-                            decoration: InputDecoration(
-                              labelText: tr('סיסמה', 'Password'),
-                              prefixIcon: const Icon(Icons.lock_outline, color: textSecondary, size: 20),
-                              suffixIcon: IconButton(
-                                onPressed: () => setState(() => _obscurePass = !_obscurePass),
-                                icon: Icon(
-                                  _obscurePass ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                  color: textSecondary, size: 20,
+                          Semantics(
+                            identifier: 'login_password_field',
+                            container: true,
+                            child: TextFormField(
+                              controller: _passCtrl,
+                              obscureText: _obscurePass,
+                              style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                              validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
+                              decoration: InputDecoration(
+                                labelText: tr('סיסמה', 'Password'),
+                                prefixIcon: const Icon(Icons.lock_outline, color: textSecondary, size: 20),
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(() => _obscurePass = !_obscurePass),
+                                  icon: Icon(
+                                    _obscurePass ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                                    color: textSecondary, size: 20,
+                                  ),
                                 ),
-                              ),
-                              labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
-                              filled: true,
-                              fillColor: bgSecondary,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: accentGreen, width: 2),
+                                labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                                filled: true,
+                                fillColor: bgSecondary,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(radiusMd),
+                                  borderSide: const BorderSide(color: borderColor),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(radiusMd),
+                                  borderSide: const BorderSide(color: borderColor),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(radiusMd),
+                                  borderSide: const BorderSide(color: accentGreen, width: 2),
+                                ),
                               ),
                             ),
                           ),
@@ -1865,6 +1890,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             label: _loading ? tr('מתחבר...', 'Signing in...') : tr('התחבר', 'Sign In'),
                             icon: _loading ? null : Icons.login,
                             onPressed: _loading ? null : _login,
+                            identifier: 'login_submit_button',
                           ),
                         ],
                       ),
@@ -4199,16 +4225,27 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Text(
-                                    'STADIUM',
-                                    style: TextStyle(
-                                      color: textPrimary,
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: 2,
+                                  // Tagged 'home_screen' — this title is
+                                  // always rendered (unlike the greeting
+                                  // below, which depends on venues/name)
+                                  // so automated tests can use it as proof
+                                  // login succeeded and this screen was
+                                  // reached. No visual change: same Text,
+                                  // just wrapped.
+                                  Semantics(
+                                    identifier: 'home_screen',
+                                    container: true,
+                                    child: const Text(
+                                      'STADIUM',
+                                      style: TextStyle(
+                                        color: textPrimary,
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 2,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
                                   ),
                                   if (!isMobile)
                                     Text(
