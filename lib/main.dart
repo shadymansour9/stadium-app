@@ -98,6 +98,22 @@ String venueSport(Map<String, dynamic> venue) {
   return kSportFootball;
 }
 
+/// Stable city key for a venue (English name, falls back to Hebrew), built
+/// from the existing region/regionEn fields. Missing → Nazareth, matching
+/// the fallback _VenueCard already uses for display.
+String venueCityKey(Map<String, dynamic> venue) =>
+    (venue['regionEn'] as String?) ?? (venue['region'] as String?) ?? 'Nazareth';
+
+/// Display name of a city key in the current language.
+String cityLabel(String key) {
+  for (final v in venues) {
+    if (venueCityKey(v) == key) {
+      return isHebrew ? ((v['region'] as String?) ?? key) : key;
+    }
+  }
+  return key;
+}
+
 IconData sportIcon(String sport) =>
     sport == kSportFootball ? Icons.sports_soccer : Icons.sports_tennis;
 
@@ -157,24 +173,24 @@ bool kDemoMode = false;
 const String demoAdminEmail = 'demo.admin@stadium-demo.app'; // reserved for the planned demo admin view
 
 final List<Map<String, dynamic>> demoStadiums = [
-  {'id': 'demo_padel_1',  'name': 'PADEL 1',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_padel_2',  'name': 'PADEL 2',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_padel_3',  'name': 'PADEL 3',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_tennis_1', 'name': 'TENNIS 1', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
-  {'id': 'demo_tennis_2', 'name': 'TENNIS 2', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
+  {'id': 'demo_padel_1',  'name': 'PADEL 1',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_padel_2',  'name': 'PADEL 2',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_padel_3',  'name': 'PADEL 3',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_tennis_1', 'name': 'TENNIS 1', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'נצרת', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
+  {'id': 'demo_tennis_2', 'name': 'TENNIS 2', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'נצרת', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
 ];
 
 final List<Map<String, dynamic>> demoVenues = [
   {
     'id': 'demo_padel', 'name': 'Demo Padel Club', 'nameEn': 'Demo Padel Club',
-    'region': 'דמו', 'regionEn': 'Demo',
+    'region': 'חיפה', 'regionEn': 'Haifa',
     'description': 'מועדון פאדל לדוגמה — 3 מגרשים', 'descriptionEn': 'Sample padel club — 3 courts',
     'color': 'orange', 'emoji': '🎾', 'isDemo': true,
     'stadiumIds': ['demo_padel_1', 'demo_padel_2', 'demo_padel_3'], 'hasTraining': false,
   },
   {
     'id': 'demo_tennis', 'name': 'Demo Tennis Club', 'nameEn': 'Demo Tennis Club',
-    'region': 'דמו', 'regionEn': 'Demo',
+    'region': 'נצרת', 'regionEn': 'Nazareth',
     'description': 'מועדון טניס לדוגמה — 2 מגרשים', 'descriptionEn': 'Sample tennis club — 2 courts',
     'color': 'purple', 'emoji': '🎾', 'isDemo': true,
     'stadiumIds': ['demo_tennis_1', 'demo_tennis_2'], 'hasTraining': false,
@@ -4323,14 +4339,25 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
   /// Selected sport filter (null = all). Chips only render when the visible
   /// venues span more than one sport, so football-only sites look unchanged.
   String? _sportFilter;
+  /// Selected city filter key (null = all). Same rule: chips only render
+  /// when venues are in more than one city.
+  String? _cityFilter;
 
   @override
   Widget build(BuildContext context) {
     final allSports = <String>{for (final v in venues) ...sportsOfVenue(v)};
     final showSportFilter = allSports.length > 1;
-    final shownVenues = (!showSportFilter || _sportFilter == null)
-        ? venues
-        : venues.where((v) => sportsOfVenue(v).contains(_sportFilter)).toList();
+    final allCities = <String>[];
+    for (final v in venues) {
+      final c = venueCityKey(v);
+      if (!allCities.contains(c)) allCities.add(c);
+    }
+    final showCityFilter = allCities.length > 1;
+    final shownVenues = venues.where((v) {
+      if (showSportFilter && _sportFilter != null && !sportsOfVenue(v).contains(_sportFilter)) return false;
+      if (showCityFilter && _cityFilter != null && venueCityKey(v) != _cityFilter) return false;
+      return true;
+    }).toList();
     final width = MediaQuery.of(context).size.width;
     final isMobile = width < 700;
     final isTablet = width >= 700 && width < 1100;
@@ -4602,6 +4629,27 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                             onSelected: (s) => setState(() => _sportFilter = s),
                           ),
 
+                        if (showCityFilter)
+                          _CityFilterChips(
+                            cities: allCities,
+                            selected: _cityFilter,
+                            onSelected: (c) => setState(() => _cityFilter = c),
+                          ),
+
+                        if (shownVenues.isEmpty && (showSportFilter || showCityFilter))
+                          Semantics(
+                            identifier: 'venue_filter_empty',
+                            container: true,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: spaceLg),
+                              child: Text(
+                                tr('אין מתחמים שמתאימים לסינון', 'No venues match these filters'),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+
                         const SizedBox(height: spaceXs),
 
                         GridView.builder(
@@ -4822,6 +4870,48 @@ class _SportFilterChips extends StatelessWidget {
         _chip('all', tr('הכל', 'All'), null, selected == null, () => onSelected(null)),
         for (final s in sports)
           _chip(s.toLowerCase(), sportLabel(s), sportIcon(s), selected == s, () => onSelected(s)),
+      ]),
+    );
+  }
+}
+
+/// City filter chips, shown under the sport chips. Each chip carries a
+/// Semantics identifier `city_filter_{all|<city key lowercased>}` for E2E,
+/// e.g. city_filter_nazareth, city_filter_haifa.
+class _CityFilterChips extends StatelessWidget {
+  final List<String> cities;
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+  const _CityFilterChips({required this.cities, required this.selected, required this.onSelected});
+
+  Widget _chip(String id, String label, bool isSel, VoidCallback onTap) {
+    return Semantics(
+      identifier: 'city_filter_$id',
+      container: true,
+      button: true,
+      selected: isSel,
+      child: ChoiceChip(
+        selected: isSel,
+        onSelected: (_) => onTap(),
+        avatar: Icon(Icons.location_on_outlined, size: 16, color: isSel ? bgColor : accentGreen),
+        label: Text(label),
+        showCheckmark: false,
+        labelStyle: TextStyle(color: isSel ? bgColor : textPrimary, fontWeight: FontWeight.w700, fontSize: 13),
+        selectedColor: accentGreen,
+        backgroundColor: cardColor,
+        side: BorderSide(color: isSel ? accentGreen : borderColor),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: spaceSm),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        _chip('all', tr('כל הערים', 'All cities'), selected == null, () => onSelected(null)),
+        for (final c in cities)
+          _chip(c.toLowerCase().replaceAll(' ', '_'), cityLabel(c), selected == c, () => onSelected(c)),
       ]),
     );
   }
