@@ -1,0 +1,13 @@
+{
+  "name": "stadium-scripts",
+  "private": true,
+  "description": "Maintenance scripts for STADIUM (demo seeding).",
+  "scripts": {
+    "seed-demo": "node seed_demo.js seed",
+    "delete-demo": "node seed_demo.js delete",
+    "list-demo": "node seed_demo.js list"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.6.0"
+  }
+}

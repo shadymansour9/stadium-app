@@ -27,7 +27,8 @@ const String yStadiumAdminEmail = 'admin.ystadium@gmail.com';
 /// `app_config/contact` doc is missing, empty, or unreadable.
 const String kDefaultContactEmail = 'MANSOURSHADY69@gmail.com';
 
-const List<Map<String, dynamic>> allStadiums = [
+// `final` (not const) so demo courts can be appended when ?demo=1.
+final List<Map<String, dynamic>> allStadiums = [
   {'id': 'md9_main',  'name': 'SM MAIN',   'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
   {'id': 'md9_2',     'name': 'SM 2',      'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
   {'id': 'y_stadium', 'name': 'X STADIUM', 'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': yStadiumAdminEmail},
@@ -57,6 +58,134 @@ Map<String, dynamic>? venueForStadium(String stadiumId) {
 
 Map<String, dynamic>? venueById(String id) {
   try { return venues.firstWhere((v) => v['id'] == id); } catch (_) { return null; }
+}
+
+// ==================== SPORTS (padel / tennis) ====================
+// Sport lives on each court as the existing `type` field. A missing value
+// means Football, so the live football venues need no data migration.
+const String kSportFootball = 'Football';
+const String kSportPadel    = 'Padel';
+const String kSportTennis   = 'Tennis';
+
+/// Per-sport defaults. Football values mirror today's behaviour exactly
+/// (2h default slots, 60/90/120 options, 18-player display cap) so football
+/// screens stay identical; only padel/tennis read the other entries.
+const Map<String, Map<String, dynamic>> sportDefaults = {
+  kSportFootball: {'slotOptions': [60, 90, 120], 'defaultSlotMinutes': 120, 'maxPlayers': null},
+  kSportPadel:    {'slotOptions': [60, 90],      'defaultSlotMinutes': 90,  'maxPlayers': 4},
+  kSportTennis:   {'slotOptions': [60, 90],      'defaultSlotMinutes': 60,  'maxPlayers': 4, 'singlesPlayers': 2},
+};
+
+/// Sport of a court map (from `allStadiums`). Missing/unknown → Football.
+String sportOf(Map<String, dynamic>? stadium) {
+  final t = stadium?['type'] as String?;
+  return (t == kSportPadel || t == kSportTennis) ? t! : kSportFootball;
+}
+
+bool isRacketSport(String sport) => sport == kSportPadel || sport == kSportTennis;
+
+/// Sports offered by a venue, derived from its courts.
+Set<String> sportsOfVenue(Map<String, dynamic> venue) {
+  final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
+  return allStadiums.where((s) => ids.contains(s['id'])).map(sportOf).toSet();
+}
+
+/// Primary sport of a venue (first non-football sport if any).
+String venueSport(Map<String, dynamic> venue) {
+  final s = sportsOfVenue(venue);
+  if (s.contains(kSportPadel)) return kSportPadel;
+  if (s.contains(kSportTennis)) return kSportTennis;
+  return kSportFootball;
+}
+
+IconData sportIcon(String sport) =>
+    sport == kSportFootball ? Icons.sports_soccer : Icons.sports_tennis;
+
+String sportLabel(String sport) {
+  switch (sport) {
+    case kSportPadel:  return tr('פאדל', 'Padel');
+    case kSportTennis: return tr('טניס', 'Tennis');
+    default:           return tr('כדורגל', 'Football');
+  }
+}
+
+/// "Court" wording for padel/tennis. For football returns [footballHe] /
+/// [footballEn] unchanged, so every existing football string is preserved.
+String courtWord(String sport, String footballHe, String footballEn, {bool plural = false}) {
+  switch (sport) {
+    case kSportPadel:  return tr(plural ? 'מגרשי פאדל' : 'מגרש פאדל', plural ? 'courts' : 'Court');
+    case kSportTennis: return tr(plural ? 'מגרשי טניס' : 'מגרש טניס', plural ? 'courts' : 'Court');
+    default:           return tr(footballHe, footballEn);
+  }
+}
+
+/// Build slots of [durationMinutes] between [open] and [close] ("HH:mm").
+/// Used only for racket-sport courts that define opening hours.
+List<Map<String, String>> buildSlotsBetween(String open, String close, int durationMinutes) {
+  final slots = <Map<String, String>>[];
+  var cursor = _minutesOf(open);
+  var end = _minutesOf(close);
+  if (end <= cursor) end += 24 * 60;
+  while (cursor + durationMinutes <= end) {
+    final m = cursor % (24 * 60);
+    final start = '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+    slots.add({'start': start, 'end': _addMinutes(start, durationMinutes)});
+    cursor += durationMinutes;
+  }
+  return slots;
+}
+
+/// Default day schedule for a court when no admin_schedule override exists.
+/// Football → the existing [defaultSlots] (unchanged).
+List<Map<String, String>> defaultSlotsForStadium(Map<String, dynamic>? stadium) {
+  final sport = sportOf(stadium);
+  if (!isRacketSport(sport)) return List.from(defaultSlots);
+  final mins = (stadium?['slotMinutes'] as int?) ?? (sportDefaults[sport]!['defaultSlotMinutes'] as int);
+  return buildSlotsBetween(
+    (stadium?['openTime'] as String?) ?? '08:00',
+    (stadium?['closeTime'] as String?) ?? '00:00',
+    mins,
+  );
+}
+
+// ==================== DEMO MODE ====================
+// Demo venues are only merged into `venues` / `allStadiums` when the app is
+// loaded with ?demo=1 (see main()). Real players on the normal URL never see
+// them. Demo bookings are seeded by scripts/seed_demo.js and tagged isDemo.
+bool kDemoMode = false;
+
+const String demoAdminEmail = 'demo.admin@stadium-demo.app'; // reserved for the planned demo admin view
+
+final List<Map<String, dynamic>> demoStadiums = [
+  {'id': 'demo_padel_1',  'name': 'PADEL 1',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_padel_2',  'name': 'PADEL 2',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_padel_3',  'name': 'PADEL 3',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
+  {'id': 'demo_tennis_1', 'name': 'TENNIS 1', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
+  {'id': 'demo_tennis_2', 'name': 'TENNIS 2', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'Demo', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
+];
+
+final List<Map<String, dynamic>> demoVenues = [
+  {
+    'id': 'demo_padel', 'name': 'Demo Padel Club', 'nameEn': 'Demo Padel Club',
+    'region': 'דמו', 'regionEn': 'Demo',
+    'description': 'מועדון פאדל לדוגמה — 3 מגרשים', 'descriptionEn': 'Sample padel club — 3 courts',
+    'color': 'orange', 'emoji': '🎾', 'isDemo': true,
+    'stadiumIds': ['demo_padel_1', 'demo_padel_2', 'demo_padel_3'], 'hasTraining': false,
+  },
+  {
+    'id': 'demo_tennis', 'name': 'Demo Tennis Club', 'nameEn': 'Demo Tennis Club',
+    'region': 'דמו', 'regionEn': 'Demo',
+    'description': 'מועדון טניס לדוגמה — 2 מגרשים', 'descriptionEn': 'Sample tennis club — 2 courts',
+    'color': 'purple', 'emoji': '🎾', 'isDemo': true,
+    'stadiumIds': ['demo_tennis_1', 'demo_tennis_2'], 'hasTraining': false,
+  },
+];
+
+void enableDemoVenues() {
+  if (kDemoMode) return;
+  kDemoMode = true;
+  allStadiums.addAll(demoStadiums);
+  venues.addAll(demoVenues);
 }
 
 Color _colorForVenue(String? color) {
@@ -172,6 +301,7 @@ IconData _iconForType(String? icon) {
     case 'celebration': return Icons.celebration;
     case 'groups':      return Icons.groups;
     case 'party':       return Icons.emoji_events;
+    case 'tennis':      return Icons.sports_tennis;
     default:            return Icons.sports_soccer;
   }
 }
@@ -1023,7 +1153,7 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
       Text(tr('פרטי הזמנה','Booking Details'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
     ]),
     content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _detailRow(Icons.sports_soccer_outlined, tr('מגרש','Stadium'), b['stadiumName']??''),
+      _detailRow(Icons.sports_soccer_outlined, courtWord(b['sport'] as String? ?? kSportFootball, 'מגרש', 'Stadium'), b['stadiumName']??''),
       if ((b['bookingType'] as String?)?.isNotEmpty == true)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -1072,7 +1202,7 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
       _detailRow(Icons.tag, tr('קוד','Code'), b['bookingCode']??''),
       const SizedBox(height: 12),
       const Divider(color: borderColor), const SizedBox(height: 8),
-      Text(tr('שחקנים (${players.length}/18)','Players (${players.length}/18)'),
+      Text(tr('שחקנים (${players.length}/${b['maxPlayers'] ?? 18})','Players (${players.length}/${b['maxPlayers'] ?? 18})'),
         style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
       const SizedBox(height: 8),
       Wrap(spacing: 6, runSpacing: 6, children: players.map((p) =>
@@ -1289,6 +1419,11 @@ void main() async {
   // loading the app with that query param.
   if (kIsWeb && Uri.base.queryParameters['e2e'] == '1') {
     SemanticsBinding.instance.ensureSemantics();
+  }
+  // Demo venues (padel/tennis) only with ?demo=1. Independent of ?e2e=1, so
+  // `/?demo=1&e2e=1` enables both.
+  if (kIsWeb && Uri.base.queryParameters['demo'] == '1') {
+    enableDemoVenues();
   }
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
@@ -2438,7 +2573,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
     stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
     builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
-      final docs = snap.data!.docs;
+      final docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
       final allBookings = docs.map((d) => d.data()).toList();
       int totalP = 0; Map<String, int> sCount = {}, sRev = {};
       for (final d in docs) {
@@ -2484,7 +2619,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
     stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
     builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
-      var docs = snap.data!.docs;
+      var docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
       if (_search.isNotEmpty) {
         docs = docs.where((d) {
           final b = d.data();
@@ -2525,7 +2660,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
       stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
       builder: (context, snap) {
         if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
-        final docs = snap.data!.docs;
+        final docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
         final now = DateTime.now();
 
         // חישוב טווח לפי בחירה
@@ -3114,6 +3249,12 @@ class AdminStadiumTab extends StatefulWidget {
 }
 class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProviderStateMixin {
   int _selDay = 0;
+  // Court definition (for sport defaults). Football courts → unchanged paths.
+  Map<String, dynamic>? get _court {
+    for (final s in allStadiums) { if (s['id'] == widget.stadiumId) return s; }
+    return null;
+  }
+  String get _sport => sportOf(_court);
   String _search = '';
   late List<Map<String, String>> _days;
   DateTime _reportFrom = DateTime.now().subtract(const Duration(days: 30));
@@ -3148,10 +3289,18 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       return raw.map((s) => {'start': s['start'] as String, 'end': s['end'] as String}).toList();
     }
     if (schedData != null && schedData['slotDurationMinutes'] != null) {
+      if (isRacketSport(_sport)) return _racketSlots(schedData['slotDurationMinutes'] as int);
       return buildDefaultSlots(schedData['slotDurationMinutes'] as int);
     }
+    if (isRacketSport(_sport)) return defaultSlotsForStadium(_court);
     return List.from(defaultSlots);
   }
+
+  List<Map<String, String>> _racketSlots(int mins) => buildSlotsBetween(
+        (_court?['openTime'] as String?) ?? '08:00',
+        (_court?['closeTime'] as String?) ?? '00:00',
+        mins,
+      );
 
   Future<void> _setDayDuration(int durationMinutes, bool hasBookedSlots) async {
     if (hasBookedSlots) {
@@ -3164,7 +3313,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       return;
     }
     try {
-      final newSlots = buildDefaultSlots(durationMinutes);
+      final newSlots = isRacketSport(_sport) ? _racketSlots(durationMinutes) : buildDefaultSlots(durationMinutes);
       await FirebaseFirestore.instance.collection('admin_schedule').doc(_docId).set({
         'slots': newSlots.map((s) => {'start': s['start'], 'end': s['end']}).toList(),
         'slotDurationMinutes': durationMinutes,
@@ -4018,9 +4167,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   side: const BorderSide(color: borderColor),
                 ),
                 itemBuilder: (_) => [
-                  PopupMenuItem<int>(value: 60,  child: Text(tr('60 דקות', '60 min'),   style: const TextStyle(color: textPrimary, fontSize: 13))),
-                  PopupMenuItem<int>(value: 90,  child: Text(tr('90 דקות', '90 min'),   style: const TextStyle(color: textPrimary, fontSize: 13))),
-                  PopupMenuItem<int>(value: 120, child: Text(tr('120 דקות', '120 min'), style: const TextStyle(color: textPrimary, fontSize: 13))),
+                  for (final mins in (sportDefaults[_sport]!['slotOptions'] as List).cast<int>())
+                    PopupMenuItem<int>(value: mins, child: Text(tr('$mins דקות', '$mins min'), style: const TextStyle(color: textPrimary, fontSize: 13))),
                 ],
                 onSelected: (mins) => _setDayDuration(mins, bookedLabels.isNotEmpty),
               ),
@@ -4172,8 +4320,17 @@ class VenueSelectionScreen extends StatefulWidget {
 }
 
 class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
+  /// Selected sport filter (null = all). Chips only render when the visible
+  /// venues span more than one sport, so football-only sites look unchanged.
+  String? _sportFilter;
+
   @override
   Widget build(BuildContext context) {
+    final allSports = <String>{for (final v in venues) ...sportsOfVenue(v)};
+    final showSportFilter = allSports.length > 1;
+    final shownVenues = (!showSportFilter || _sportFilter == null)
+        ? venues
+        : venues.where((v) => sportsOfVenue(v).contains(_sportFilter)).toList();
     final width = MediaQuery.of(context).size.width;
     final isMobile = width < 700;
     final isTablet = width >= 700 && width < 1100;
@@ -4438,6 +4595,13 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
 
                         appSectionTitle(tr('מתחמים זמינים', 'AVAILABLE VENUES')),
 
+                        if (showSportFilter)
+                          _SportFilterChips(
+                            sports: [kSportFootball, kSportPadel, kSportTennis].where(allSports.contains).toList(),
+                            selected: _sportFilter,
+                            onSelected: (s) => setState(() => _sportFilter = s),
+                          ),
+
                         const SizedBox(height: spaceXs),
 
                         GridView.builder(
@@ -4449,9 +4613,9 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                             crossAxisSpacing: spaceMd,
                             childAspectRatio: isMobile ? 1.05 : 0.95,
                           ),
-                          itemCount: venues.length,
+                          itemCount: shownVenues.length,
                           itemBuilder: (ctx, i) {
-                            final v = venues[i];
+                            final v = shownVenues[i];
                             return _VenueCard(
                               venue: v,
                               identifier: 'venue_card_${v['id']}',
@@ -4622,6 +4786,47 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
 // ====================================================
 // VENUE CARD WIDGET
 // ====================================================
+/// Sport filter chips for the venue selection screen. Each chip carries a
+/// Semantics identifier `sport_filter_{all|football|padel|tennis}` for E2E.
+class _SportFilterChips extends StatelessWidget {
+  final List<String> sports;
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+  const _SportFilterChips({required this.sports, required this.selected, required this.onSelected});
+
+  Widget _chip(String id, String label, IconData? icon, bool isSel, VoidCallback onTap) {
+    return Semantics(
+      identifier: 'sport_filter_$id',
+      container: true,
+      button: true,
+      selected: isSel,
+      child: ChoiceChip(
+        selected: isSel,
+        onSelected: (_) => onTap(),
+        avatar: icon == null ? null : Icon(icon, size: 16, color: isSel ? bgColor : accentGreen),
+        label: Text(label),
+        showCheckmark: false,
+        labelStyle: TextStyle(color: isSel ? bgColor : textPrimary, fontWeight: FontWeight.w700, fontSize: 13),
+        selectedColor: accentGreen,
+        backgroundColor: cardColor,
+        side: BorderSide(color: isSel ? accentGreen : borderColor),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: spaceSm),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        _chip('all', tr('הכל', 'All'), null, selected == null, () => onSelected(null)),
+        for (final s in sports)
+          _chip(s.toLowerCase(), sportLabel(s), sportIcon(s), selected == s, () => onSelected(s)),
+      ]),
+    );
+  }
+}
+
 class _VenueCard extends StatelessWidget {
   final Map<String, dynamic> venue;
   final VoidCallback onTap;
@@ -4774,7 +4979,7 @@ class _VenueCard extends StatelessWidget {
                   Row(children: [
                     _metaItemOnImage(Icons.location_on_outlined, region),
                     const SizedBox(width: spaceMd),
-                    _metaItemOnImage(Icons.sports_soccer, '$stadiumCount ${isHebrew ? "מגרשים" : "fields"}'),
+                    _metaItemOnImage(sportIcon(venueSport(venue)), '$stadiumCount ${courtWord(venueSport(venue), "מגרשים", "fields", plural: true)}'),
                   ]),
                   const SizedBox(height: spaceSm),
                   Container(height: 1, color: Colors.white.withValues(alpha: 0.2)),
@@ -4892,7 +5097,7 @@ class _VenueCard extends StatelessWidget {
               Row(children: [
                 _metaItem(Icons.location_on_outlined, region),
                 const SizedBox(width: spaceMd),
-                _metaItem(Icons.sports_soccer, '$stadiumCount ${isHebrew ? "מגרשים" : "fields"}'),
+                _metaItem(sportIcon(venueSport(venue)), '$stadiumCount ${courtWord(venueSport(venue), "מגרשים", "fields", plural: true)}'),
               ]),
               const SizedBox(height: spaceSm),
               Container(height: 1, color: borderColor),
@@ -5030,6 +5235,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
     final hasTraining = venue['hasTraining'] == true;
     final stadiumIds = (venue['stadiumIds'] as List? ?? const []).cast<String>();
     final stadiums = allStadiums.where((s) => stadiumIds.contains(s['id'] as String)).toList();
+    final sport = venueSport(venue);
     final emoji = venue['emoji'] as String? ?? '🏟️';
     final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
     final region = isHebrew ? (venue['region'] as String? ?? 'נצרת') : (venue['regionEn'] as String? ?? 'Nazareth');
@@ -5038,7 +5244,9 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
       {
         'id': 'venue_action_book_a_field',
         'icon': Icons.calendar_month_rounded,
-        'title': tr('הזמן מגרש', 'Book a Field'),
+        'title': isRacketSport(sport)
+            ? tr('הזמן ${courtWord(sport, '', '')}', 'Book a Court')
+            : tr('הזמן מגרש', 'Book a Field'),
         'subtitle': tr('בחר תאריך ושעה', 'Pick date & time'),
         'color': accentGreen,
         'onTap': () {
@@ -5166,10 +5374,10 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                                           ),
                                         ),
                                         const SizedBox(width: spaceSm),
-                                        const Icon(Icons.sports_soccer, color: textSecondary, size: 13),
+                                        Icon(sportIcon(sport), color: textSecondary, size: 13),
                                         const SizedBox(width: 4),
                                         Text(
-                                          '${stadiums.length} ${isHebrew ? "מגרשים" : "fields"}',
+                                          '${stadiums.length} ${courtWord(sport, "מגרשים", "fields", plural: true)}',
                                           style: const TextStyle(
                                             color: textSecondary,
                                             fontSize: 12,
@@ -5423,7 +5631,7 @@ class StadiumSelectionScreen extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: bgColor,
-      appBar: PlayerAppBar(title: '${tr('בחר מגרש', 'Choose a Field')} — $vName'),
+      appBar: PlayerAppBar(title: '${isRacketSport(venueSport(venue)) ? tr('בחר ${courtWord(venueSport(venue), '', '')}', 'Choose a Court') : tr('בחר מגרש', 'Choose a Field')} — $vName'),
       body: SafeArea(
         child: Column(
           children: [
@@ -5474,7 +5682,7 @@ class StadiumSelectionScreen extends StatelessWidget {
                                     color: accentGreen.withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(14),
                                   ),
-                                  child: const Icon(Icons.sports_soccer, color: accentGreen, size: 28),
+                                  child: Icon(sportIcon(sportOf(s)), color: accentGreen, size: 28),
                                 ),
                                 const SizedBox(height: spaceMd),
                                 Text(
@@ -5607,9 +5815,25 @@ class _BookingScreenState extends State<BookingScreen> {
   int _selDay = 0; int? _selSlot; bool _booking = false;
   late List<Map<String, String>> _days;
   Set<String> _bookedSlots = {}, _blockedSlots = {};
-  List<Map<String, String>> _slots = List.from(defaultSlots);
+  late List<Map<String, String>> _slots = defaultSlotsForStadium(widget.stadium);
   List<Map<String, dynamic>> _bookingTypes = [];
   Map<String, dynamic>? _selectedType;
+  // Tennis only: singles (2 players) or doubles (4). Ignored for other sports.
+  bool _tennisDoubles = false;
+
+  String get _sport => sportOf(widget.stadium);
+
+  /// Max players for a new booking: null for football (unchanged behaviour),
+  /// 4 for padel, 2/4 for tennis singles/doubles.
+  int? get _maxPlayersForBooking {
+    if (_sport == kSportPadel) return sportDefaults[kSportPadel]!['maxPlayers'] as int;
+    if (_sport == kSportTennis) {
+      return _tennisDoubles
+          ? sportDefaults[kSportTennis]!['maxPlayers'] as int
+          : sportDefaults[kSportTennis]!['singlesPlayers'] as int;
+    }
+    return null;
+  }
   List<Map<String, dynamic>> _trainingGroups = [];
   List<Map<String, dynamic>> _recurringBlocks = [];
 
@@ -5644,6 +5868,14 @@ class _BookingScreenState extends State<BookingScreen> {
     final gSnap = results[3] as QuerySnapshot<Map<String, dynamic>>;
     final rSnap = results[4] as QuerySnapshot<Map<String, dynamic>>;
     List<Map<String, dynamic>> types = tSnap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+    if (types.isEmpty && isRacketSport(_sport)) {
+      // Padel/tennis: one plain court booking type priced per hour.
+      types = [{
+        'name': courtWord(_sport, '', ''), 'nameEn': '${sportLabel(_sport)} court',
+        'icon': 'tennis', 'color': 'green',
+        'price': widget.stadium['price'], 'pricePerHour': widget.stadium['pricePerHour'],
+      }];
+    }
     if (types.isEmpty) {
       types = defaultBookingTypes.map((t) => {...t, 'price': widget.stadium['price'] ?? t['price']}).toList();
     }
@@ -5658,8 +5890,14 @@ class _BookingScreenState extends State<BookingScreen> {
         if (sSnap.data()?['slots'] != null) {
           final raw = sSnap.data()!['slots'] as List;
           _slots = raw.map((s) => {'start': s['start'] as String, 'end': s['end'] as String}).toList();
-        } else { _slots = List.from(defaultSlots); }
-      } else { _blockedSlots = {}; _slots = List.from(defaultSlots); }
+        } else if (sSnap.data()?['slotDurationMinutes'] != null && isRacketSport(_sport)) {
+          _slots = buildSlotsBetween(
+            (widget.stadium['openTime'] as String?) ?? '08:00',
+            (widget.stadium['closeTime'] as String?) ?? '00:00',
+            sSnap.data()!['slotDurationMinutes'] as int,
+          );
+        } else { _slots = defaultSlotsForStadium(widget.stadium); }
+      } else { _blockedSlots = {}; _slots = defaultSlotsForStadium(widget.stadium); }
     });
   }
 
@@ -5735,11 +5973,53 @@ class _BookingScreenState extends State<BookingScreen> {
                     border: Border.all(color: borderColor),
                   ),
                   child: Column(children: [
-                    _confirmRow(Icons.sports_soccer, tr('מגרש', 'Field'), widget.stadium['name'] as String),
+                    _confirmRow(sportIcon(sportOf(widget.stadium)), courtWord(sportOf(widget.stadium), 'מגרש', 'Field'), widget.stadium['name'] as String),
                     const SizedBox(height: 10),
                     _confirmRow(Icons.calendar_today_outlined, tr('תאריך', 'Date'), _days[_selDay]['date']!),
                     const SizedBox(height: 10),
                     _confirmRow(Icons.access_time, tr('שעה', 'Time'), label),
+                    if (isRacketSport(_sport)) ...[
+                      const SizedBox(height: 10),
+                      StatefulBuilder(builder: (ctx2, setDlg) => Column(children: [
+                        if (_sport == kSportTennis) ...[
+                          Row(children: [
+                            for (final doubles in [false, true]) ...[
+                              Expanded(
+                                child: Semantics(
+                                  identifier: doubles ? 'booking_format_doubles' : 'booking_format_singles',
+                                  container: true,
+                                  button: true,
+                                  selected: _tennisDoubles == doubles,
+                                  child: ChoiceChip(
+                                    selected: _tennisDoubles == doubles,
+                                    onSelected: (_) { setState(() => _tennisDoubles = doubles); setDlg(() {}); },
+                                    showCheckmark: false,
+                                    label: SizedBox(
+                                      width: double.infinity,
+                                      child: Text(
+                                        doubles ? tr('זוגות (4)', 'Doubles (4)') : tr('יחידים (2)', 'Singles (2)'),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                    labelStyle: TextStyle(color: _tennisDoubles == doubles ? bgColor : textPrimary, fontWeight: FontWeight.w700, fontSize: 13),
+                                    selectedColor: accentGreen,
+                                    backgroundColor: cardColor,
+                                    side: BorderSide(color: _tennisDoubles == doubles ? accentGreen : borderColor),
+                                  ),
+                                ),
+                              ),
+                              if (!doubles) const SizedBox(width: 8),
+                            ],
+                          ]),
+                          const SizedBox(height: 10),
+                        ],
+                        Semantics(
+                          identifier: 'booking_players_count',
+                          container: true,
+                          child: _confirmRow(Icons.group_outlined, tr('מקסימום שחקנים', 'Max players'), '${_maxPlayersForBooking ?? ''}'),
+                        ),
+                      ])),
+                    ],
                     if (_selectedType != null) ...[
                       const SizedBox(height: 10),
                       _confirmRow(
@@ -5905,6 +6185,13 @@ class _BookingScreenState extends State<BookingScreen> {
       'bookingCode': code,
       'players': [myName],
       'createdAt': DateTime.now().toIso8601String(),
+      // Padel/tennis only — football booking docs are written exactly as before.
+      if (isRacketSport(_sport)) ...{
+        'sport': _sport,
+        'maxPlayers': _maxPlayersForBooking,
+        if (_sport == kSportTennis) 'format': _tennisDoubles ? 'doubles' : 'singles',
+      },
+      if (widget.stadium['isDemo'] == true) 'isDemo': true,
       if (_selectedType != null) ...{
         'bookingType':      _selectedType!['name']   ?? '',
         'bookingTypeEn':    _selectedType!['nameEn'] ?? '',
@@ -5919,6 +6206,10 @@ class _BookingScreenState extends State<BookingScreen> {
         if (snap.exists) {
           // Another user grabbed this slot in the same millisecond — bail.
           throw FirebaseException(plugin: 'cloud_firestore', code: 'already-exists');
+        }
+        final cap = bookingData['maxPlayers'] as int?;
+        if (cap != null && (bookingData['players'] as List).length > cap) {
+          throw FirebaseException(plugin: 'cloud_firestore', code: 'failed-precondition', message: 'too-many-players');
         }
         txn.set(bookingRef, bookingData);
       });
@@ -6348,7 +6639,7 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _detailRow(tr('שם', 'Name'), '${data['userName'] ?? '-'}'),
-                  _detailRow(tr('מגרש', 'Field'), '${data['stadiumName'] ?? '-'}'),
+                  _detailRow(courtWord(data['sport'] as String? ?? kSportFootball, 'מגרש', 'Field'), '${data['stadiumName'] ?? '-'}'),
                   _detailRow(tr('תאריך', 'Date'), '${data['date'] ?? '-'}'),
                   _detailRow(tr('שעה', 'Time'), '${data['time'] ?? '-'}'),
                 ],
@@ -6491,7 +6782,54 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
     setState(() { _booking=data; _joined=((data['players'] as List?)??[]).contains(_myName); _loading=false; });
   }
 
+  /// Padel/tennis join: read-check-write in one transaction so two players
+  /// can never take the last spot at the same time.
+  /// Returns null on success, or an error message.
+  Future<String?> _joinCapped() async {
+    final ref = FirebaseFirestore.instance.collection('bookings').doc(_booking!['id']);
+    try {
+      return await FirebaseFirestore.instance.runTransaction<String?>((txn) async {
+        final snap = await txn.get(ref);
+        if (!snap.exists) return tr('ההזמנה לא נמצאה', 'Booking not found');
+        final data = snap.data()!;
+        final players = List<String>.from((data['players'] as List?) ?? const []);
+        final cap = (data['maxPlayers'] as num).toInt();
+        if (players.contains(_myName)) return null;
+        if (players.length >= cap) return tr('ההזמנה מלאה ($cap/$cap)', 'Booking full ($cap/$cap)');
+        txn.update(ref, {'players': [...players, _myName]});
+        return null;
+      });
+    } catch (e) {
+      return tr('שגיאה בהצטרפות, נסה שוב', 'Could not join, please try again');
+    }
+  }
+
   Future<void> _join() async {
+    if (_booking!['maxPlayers'] != null) {
+      setState(() { _loading=true; _error=''; });
+      final err = await _joinCapped();
+      if (err != null) { setState(() { _error=err; _loading=false; }); return; }
+      final user = FirebaseAuth.instance.currentUser;
+      try {
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'userId': user?.uid,
+          'title': tr('הצטרפת למשחק! 🎾','You joined a game! 🎾'),
+          'body': tr('הצטרפת ל-${_booking!['stadiumName']} ב-${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}', 'You joined ${_booking!['stadiumName']} on ${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}'),
+          'read': false, 'createdAt': DateTime.now().toIso8601String(),
+        });
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'userId': _booking!['userId'],
+          'title': tr('שחקן חדש הצטרף! 👥','New player joined! 👥'),
+          'body': tr('$_myName הצטרף למשחק שלך ב-${_booking!['stadiumName']}', '$_myName joined your game at ${_booking!['stadiumName']}'),
+          'read': false, 'createdAt': DateTime.now().toIso8601String(),
+        });
+      } catch (_) {/* non-critical */}
+      final p = List<String>.from((_booking!['players'] as List?) ?? const []);
+      if (!p.contains(_myName)) p.add(_myName);
+      setState(() { _booking = {..._booking!, 'players': p}; _success=tr('הצטרפת! 🎉',"You're in! 🎉"); _loading=false; _joined=true; });
+      return;
+    }
+    // Football (unchanged).
     final p=(_booking!['players'] as List?)??[];
     if (p.length>=18) { setState(() { _error=tr('הקבוצה מלאה (18/18)','Team full (18/18)'); }); return; }
     setState(() { _loading=true; });
@@ -6549,7 +6887,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
             Text('${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}', style: const TextStyle(color: textSecondary, fontSize: 13)),
             Text('${tr('מארגן','Organizer')}: ${_booking!['userName']??''}', style: const TextStyle(color: textSecondary, fontSize: 12)),
             const SizedBox(height: 8),
-            Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/18', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+            Semantics(identifier: 'join_players_count', container: true, child: Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/${_booking!['maxPlayers'] ?? 18}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
           ])),
         const SizedBox(height: 14),
         if (_success.isEmpty) ...[
@@ -7166,7 +7504,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             Row(children: [const Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:const TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),const Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'',style:const TextStyle(color:textSecondary,fontSize:12))]),
             const SizedBox(height: 4),
             Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
-            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/18', style: const TextStyle(color: textSecondary, fontSize: 12))],
+            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 18}', style: const TextStyle(color: textSecondary, fontSize: 12))],
             if (!isPast) ...[
               const SizedBox(height: 12),
               if (isOrg) SizedBox(width: double.infinity, child: TextButton(onPressed: canCancel?() async {
