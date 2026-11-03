@@ -27,15 +27,26 @@ service cloud.firestore {
       allow delete: if isSignedIn() && request.auth.uid == uid;
     }
 
+    // Padel/tennis bookings carry `maxPlayers`; football bookings don't, so
+    // these checks are no-ops for them (football behaviour unchanged).
+    function withinMaxPlayers() {
+      return !('maxPlayers' in request.resource.data)
+        || request.resource.data.players.size() <= request.resource.data.maxPlayers;
+    }
+    function maxPlayersUnchanged() {
+      return !('maxPlayers' in resource.data)
+        || request.resource.data.get('maxPlayers', null) == resource.data.maxPlayers;
+    }
+
     // 2) BOOKINGS - signed-in users see availability and join with codes.
     match /bookings/{bookingId} {
       allow read:   if isSignedIn();
-      allow create: if isSignedIn();
+      allow create: if isSignedIn() && withinMaxPlayers();
       allow update: if isSignedIn() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
-      );
+      ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()));
       allow delete: if isSignedIn() && (
         resource.data.userId == request.auth.uid || isAdmin()
       );
