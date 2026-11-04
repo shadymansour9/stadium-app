@@ -2987,7 +2987,7 @@ Widget _adminBookCard(Map<String,dynamic> b, {required String docId, required Bu
           Expanded(child: Text(phone, style: const TextStyle(color: accentGreen, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
         ]),
         const SizedBox(height: 4),
-        Text('${players.length}/18 ${tr('שחקנים','players')}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
@@ -4394,7 +4394,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                             onTap: () => showBookingDetails(context, bookingData, isAdmin: true, docId: match.first.id),
                             child: Row(children: [
                               if (phone.isNotEmpty) ...[Text(phone, style: const TextStyle(color: accentGreen, fontSize: 11)), const SizedBox(width: 4)],
-                              Text('$count/18', style: const TextStyle(color: textSecondary, fontSize: 12)),
+                              Text('$count/${bookingData['maxPlayers'] ?? 18}', style: const TextStyle(color: textSecondary, fontSize: 12)),
                               const SizedBox(width: 4),
                               const Icon(Icons.info_outline, color: accentGreen, size: 16),
                             ]),
@@ -10650,7 +10650,7 @@ Widget _bookCard(Map<String,dynamic> b, {BuildContext? context}) {
         const SizedBox(height: 6),
         Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: const TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 4),
-        Text('${players.length}/18 ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
