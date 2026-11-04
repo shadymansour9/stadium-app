@@ -11,12 +11,30 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Owner of the whole app. Must match kOwnerEmail in lib/main.dart. Requires
+    // a verified email, so registering with this address grants nothing.
+    function isOwner() {
+      return isSignedIn()
+        && request.auth.token.email == 'mansourshady69@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
     function isAdmin() {
-      return isSignedIn() && request.auth.token.email in [
+      return isOwner() || (isSignedIn() && request.auth.token.email in [
         'admin@gmail.com',
         'admin.md9@gmail.com',
         'admin.ystadium@gmail.com'
-      ];
+      ]);
+    }
+
+    // Court admin: appointed by the owner in court_admins/{email}, limited to
+    // the listed courts. Also needs a verified email: an appointment is only
+    // an email address, so anyone could otherwise register with it first.
+    function managesStadium(stadiumId) {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/court_admins/$(request.auth.token.email))
+        && stadiumId in get(/databases/$(database)/documents/court_admins/$(request.auth.token.email)).data.stadiumIds;
     }
 
     // 1) USERS - each user reads/writes only their own profile.
@@ -45,17 +63,38 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
       ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()));
       allow delete: if isSignedIn() && (
-        resource.data.userId == request.auth.uid || isAdmin()
+        resource.data.userId == request.auth.uid
+        || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
+    }
+
+    // Clubs and courts added from the owner's screen. A doc with the id of a
+    // code-defined club or court overrides it (active:false hides it).
+    match /venues/{venueId} {
+      allow read:  if isSignedIn();
+      allow write: if isOwner();
+    }
+    match /stadiums/{stadiumId} {
+      allow read:  if isSignedIn();
+      allow write: if isOwner();
+    }
+
+    // Which courts each admin manages. Doc id is the lowercased email.
+    match /court_admins/{email} {
+      allow read:  if isOwner() || (isSignedIn() && request.auth.token.email == email);
+      allow write: if isOwner();
     }
 
     // 3) ADMIN_SCHEDULE - per-stadium per-day overrides.
     match /admin_schedule/{docId} {
       allow read:  if isSignedIn();
-      allow write: if isAdmin();
+      // Doc id is {stadiumId}_{yyyy-MM-dd}: the last 11 characters are the date.
+      allow write: if isAdmin() || managesStadium(docId[0:docId.size() - 11]);
     }
 
     // 4) NOTIFICATIONS - each user reads/writes only their own.
@@ -69,7 +108,12 @@ service cloud.firestore {
     // 5) RECURRING_BLOCKS - weekly fixed reservations.
     match /recurring_blocks/{blockId} {
       allow read:  if isSignedIn();
-      allow write: if isAdmin();
+      allow create: if isAdmin() || managesStadium(request.resource.data.get('stadiumId', ''));
+      allow update: if isAdmin() || (
+        managesStadium(resource.data.get('stadiumId', ''))
+        && managesStadium(request.resource.data.get('stadiumId', ''))
+      );
+      allow delete: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
     }
 
     // Booking types (per-stadium configurable types).
