@@ -11,6 +11,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'export_stub.dart' if (dart.library.html) 'export_web.dart';
 
@@ -346,11 +349,134 @@ Future<bool> _refreshVerified(User user) async {
   return true;
 }
 
+/// Booking opened through a shared link (?join=<booking id>), waiting until
+/// someone is signed in.
+String? pendingJoinBookingId;
+
+/// Shows the booking from a shared link on top of the user's home screen, so
+/// Back returns to their normal home whatever their role.
+void openPendingJoin(NavigatorState nav) {
+  final id = pendingJoinBookingId;
+  if (id == null || id.isEmpty) return;
+  pendingJoinBookingId = null;
+  nav.push(MaterialPageRoute(builder: (_) => JoinByCodeScreen(bookingId: id)));
+}
+
+/// Links the booking's document, not its 4-digit code: codes can repeat.
+/// Always the website, so it opens on any phone without the app installed.
+String bookingJoinLink(String bookingId) {
+  final origin = kIsWeb ? Uri.base.origin : 'https://stadium-d5b5f.web.app';
+  return '$origin/?${Uri(queryParameters: {'join': bookingId}).query}';
+}
+
+/// Code, QR and link for inviting friends to a booking.
+class BookingSharePanel extends StatelessWidget {
+  final String bookingId;
+  final String code;
+  final String summary;
+
+  const BookingSharePanel({super.key, required this.bookingId, required this.code, required this.summary});
+
+  void _snack(BuildContext context, String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(text),
+      backgroundColor: accentGreen,
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  Future<void> _sendLink(BuildContext context, String link) async {
+    final text = tr('הצטרף למשחק: $summary\nקוד: $code\n$link', 'Join the game: $summary\nCode: $code\n$link');
+    try {
+      await SharePlus.instance.share(ShareParams(text: text, subject: 'STADIUM'));
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (context.mounted) _snack(context, tr('הקישור הועתק 📋', 'Link copied 📋'));
+    }
+  }
+
+  Widget _action(String id, IconData icon, String label, VoidCallback onTap) => Expanded(
+    child: Semantics(
+      identifier: id,
+      button: true,
+      container: true,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 16, color: accentGreen),
+        label: Text(label, style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w800)),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+          side: BorderSide(color: accentGreen.withValues(alpha: 0.4)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+        ),
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final link = bookingJoinLink(bookingId);
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Text(tr('שלח לחברים', 'SHARE WITH FRIENDS'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 2)),
+      const SizedBox(height: 8),
+      GestureDetector(
+        onTap: () async {
+          await Clipboard.setData(ClipboardData(text: code));
+          if (context.mounted) _snack(context, tr('הקוד הועתק! 📋', 'Code copied! 📋'));
+        },
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Semantics(
+                identifier: 'share_code',
+                container: true,
+                child: Text(code, style: TextStyle(color: accentGreen, fontSize: 40, fontWeight: FontWeight.w900, letterSpacing: 10)),
+              ),
+              const SizedBox(width: 12),
+              Icon(Icons.copy_outlined, color: accentGreen, size: 20),
+            ]),
+          ),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(tr('לחץ על הקוד להעתקה', 'Tap code to copy'), style: TextStyle(color: textSecondary, fontSize: 11)),
+      const SizedBox(height: 14),
+      // QR codes need dark modules on white to scan, in either app theme.
+      Semantics(
+        identifier: 'share_qr',
+        container: true,
+        image: true,
+        label: tr('ברקוד להצטרפות', 'Join QR code'),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+          child: QrImageView(data: link, size: 170, backgroundColor: Colors.white, padding: EdgeInsets.zero),
+        ),
+      ),
+      const SizedBox(height: 6),
+      Text(tr('סריקה במצלמת הטלפון פותחת את ההזמנה', "Scan with a phone camera to open the booking"), style: TextStyle(color: textSecondary, fontSize: 11), textAlign: TextAlign.center),
+      const SizedBox(height: 14),
+      Row(children: [
+        _action('share_send_link', Icons.send_rounded, tr('שלח קישור', 'Send link'), () => _sendLink(context, link)),
+        const SizedBox(width: 8),
+        _action('share_copy_link', Icons.link_rounded, tr('העתק קישור', 'Copy link'), () async {
+          await Clipboard.setData(ClipboardData(text: link));
+          if (context.mounted) _snack(context, tr('הקישור הועתק 📋', 'Link copied 📋'));
+        }),
+      ]),
+    ]);
+  }
+}
+
 Color _colorForVenue(String? color) {
   switch (color) {
     case 'blue':   return Colors.blue;
     case 'purple': return Colors.purple;
-    case 'orange': return Colors.orange;
+    case 'orange': return colorWarning;
     default:       return accentGreen;
   }
 }
@@ -469,7 +595,7 @@ Color _colorForType(String? color) {
     case 'pink':   return Colors.pink;
     case 'purple': return Colors.purple;
     case 'blue':   return Colors.blue;
-    case 'orange': return Colors.orange;
+    case 'orange': return colorWarning;
     default:       return accentGreen;
   }
 }
@@ -660,23 +786,67 @@ Future<void> _signOut([BuildContext? context]) async {
 // DESIGN SYSTEM - STADIUM v1.0
 // ====================================================
 
-// Colors
-const Color bgColor         = Color(0xFF000000);
-const Color bgSecondary     = Color(0xFF0F0F0F);
-const Color cardColor       = Color(0xFF1A1A1A);
-const Color borderColor     = Color(0xFF2A2A2A);
-const Color borderActive    = Color(0xFF3A3A3A);
+// Colors. Dark is the original look; the choice is saved per device.
+bool isLightMode = false;
+Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : 0xFF000000);
+Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : 0xFF0F0F0F);
+Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : 0xFF1A1A1A);
+Color get borderColor => Color(isLightMode ? 0xFFDDE1E6 : 0xFF2A2A2A);
+Color get borderActive => Color(isLightMode ? 0xFFC4CAD1 : 0xFF3A3A3A);
 
-const Color accentGreen     = Color(0xFF00C853);
-const Color accentGreenSoft = Color(0x3300C853);
+Color get accentGreen => Color(isLightMode ? 0xFF00843D : 0xFF00C853);
+Color get accentGreenSoft => Color(isLightMode ? 0x3300843D : 0x3300C853);
 
-const Color textPrimary     = Color(0xFFFFFFFF);
-const Color textSecondary   = Color(0xFF9E9E9E);
-const Color textTertiary    = Color(0xFF616161);
+Color get textPrimary => Color(isLightMode ? 0xFF14181D : 0xFFFFFFFF);
+Color get textSecondary => Color(isLightMode ? 0xFF566070 : 0xFF9E9E9E);
+Color get textTertiary => Color(isLightMode ? 0xFF7A8391 : 0xFF616161);
 
-const Color colorError      = Color(0xFFF44336);
-const Color colorWarning    = Color(0xFFFF9800);
-const Color colorInfo       = Color(0xFF2196F3);
+Color get colorError => Color(isLightMode ? 0xFFD32F2F : 0xFFF44336);
+Color get colorWarning => Color(isLightMode ? 0xFFB85C00 : 0xFFFF9800);
+Color get colorInfo => Color(isLightMode ? 0xFF1565C0 : 0xFF2196F3);
+Color get accentAmber => Color(isLightMode ? 0xFF9A6200 : 0xFFFFC107);
+Color get accentOrange => Color(isLightMode ? 0xFFB45309 : 0xFFF59E0B);
+Color get accentTeal => Color(isLightMode ? 0xFF0F766E : 0xFF14B8A6);
+Color get mutedIcon => Color(isLightMode ? 0xFFC4CAD1 : 0xFF333333);
+Color get bgMuted => Color(isLightMode ? 0xFFECEEF1 : 0xFF111111);
+Color get gradientEnd => Color(isLightMode ? 0xFFFFFFFF : 0xFF0D0D0D);
+
+/// Also used for date pickers, which are shown outside the screens' own colours.
+ThemeData appThemeData() {
+  final base = isLightMode ? ThemeData.light() : ThemeData.dark();
+  return base.copyWith(
+    scaffoldBackgroundColor: bgColor,
+    colorScheme: isLightMode
+        ? ColorScheme.light(primary: accentGreen, surface: cardColor, onPrimary: bgColor, outlineVariant: borderColor)
+        : ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: bgColor),
+    // 'Heebo' supports both Hebrew and Latin glyphs; loaded from Google
+    // Fonts in web/index.html. On native platforms it falls back to the
+    // system font (which is fine for Hebrew on Android/iOS).
+    textTheme: base.textTheme.apply(fontFamily: 'Heebo'),
+    primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'Heebo'),
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {
+        TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+        TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.macOS: FadeUpwardsPageTransitionsBuilder(),
+        TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+      },
+    ),
+  );
+}
+
+/// Switches light/dark everywhere at once, including screens further back in
+/// the navigation stack, and remembers the choice on this device.
+void toggleAppTheme() {
+  isLightMode = !isLightMode;
+  void rebuild(Element e) {
+    e.markNeedsBuild();
+    e.visitChildren(rebuild);
+  }
+  WidgetsBinding.instance.rootElement?.visitChildren(rebuild);
+  SharedPreferences.getInstance().then((p) => p.setBool('lightMode', isLightMode)).catchError((_) => false);
+}
 
 // Spacing
 const double spaceMicro = 4;
@@ -721,7 +891,7 @@ Widget appPrimaryButton({
       icon: icon != null ? Icon(icon, size: 20) : const SizedBox.shrink(),
       label: Text(
         label,
-        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: 1),
+        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: isHebrew ? 0 : 1),
       ),
       style: ElevatedButton.styleFrom(
         backgroundColor: accentGreen,
@@ -786,10 +956,10 @@ Widget appStatCell(String value, String label, {Color? valueColor}) {
       const SizedBox(height: spaceMicro),
       Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           color: textSecondary,
           fontSize: 10,
-          letterSpacing: 2,
+          letterSpacing: isHebrew ? 0 : 2,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -823,7 +993,7 @@ Widget appBadge(String text, Color color) {
         color: color,
         fontSize: 10,
         fontWeight: FontWeight.w800,
-        letterSpacing: 1,
+        letterSpacing: isHebrew ? 0 : 1,
       ),
     ),
   );
@@ -845,10 +1015,10 @@ Widget appSecondaryButton({
       icon: icon != null ? Icon(icon, size: 18, color: accentGreen) : const SizedBox.shrink(),
       label: Text(
         label,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.5, color: accentGreen),
+        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: isHebrew ? 0 : 0.5, color: accentGreen),
       ),
       style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: accentGreen, width: 1.5),
+        side: BorderSide(color: accentGreen, width: 1.5),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusLg)),
         backgroundColor: cardColor,
       ),
@@ -872,10 +1042,10 @@ Widget appTertiaryButton({
       icon: icon != null ? Icon(icon, size: 16, color: textSecondary) : const SizedBox.shrink(),
       label: Text(
         label,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: textPrimary),
+        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: textPrimary),
       ),
       style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: borderColor),
+        side: BorderSide(color: borderColor),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
         backgroundColor: bgSecondary,
       ),
@@ -902,16 +1072,19 @@ Widget appTextField({
     controller: controller,
     obscureText: obscure,
     keyboardType: keyboardType,
+    textDirection: obscure || keyboardType == TextInputType.emailAddress || keyboardType == TextInputType.phone
+        ? TextDirection.ltr
+        : null,
     validator: validator,
     onTap: onTap,
     readOnly: readOnly,
-    style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
     decoration: InputDecoration(
       labelText: label,
       hintText: hint,
       prefixIcon: icon != null ? Icon(icon, color: textSecondary, size: 20) : null,
-      labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
-      hintStyle: const TextStyle(color: textTertiary, fontSize: 13),
+      labelStyle: TextStyle(color: textSecondary, fontSize: 13),
+      hintStyle: TextStyle(color: textTertiary, fontSize: 13),
       filled: true,
       fillColor: cardColor,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -925,11 +1098,11 @@ Widget appTextField({
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: accentGreen, width: 2),
+        borderSide: BorderSide(color: accentGreen, width: 2),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radiusMd),
-        borderSide: const BorderSide(color: colorError),
+        borderSide: BorderSide(color: colorError),
       ),
     ),
   );
@@ -944,14 +1117,14 @@ Widget appTextField({
 Widget appScreenHeader(BuildContext context, String title, {String? subtitle, List<Widget>? actions}) {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: spaceMd, vertical: spaceMd),
-    decoration: const BoxDecoration(
+    decoration: BoxDecoration(
       color: bgColor,
       border: Border(bottom: BorderSide(color: borderColor)),
     ),
     child: Row(children: [
       IconButton(
         onPressed: () => Navigator.pop(context),
-        icon: const Icon(Icons.arrow_back, color: textPrimary, size: 22),
+        icon: Icon(Icons.arrow_back, color: textPrimary, size: 22),
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(),
       ),
@@ -960,10 +1133,10 @@ Widget appScreenHeader(BuildContext context, String title, {String? subtitle, Li
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
+            Text(title, style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
             if (subtitle != null) ...[
               const SizedBox(height: 2),
-              Text(subtitle, style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500)),
+              Text(subtitle, style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500)),
             ],
           ],
         ),
@@ -981,13 +1154,13 @@ Widget appSectionTitle(String title, {String? action, VoidCallback? onActionTap,
     padding: const EdgeInsets.symmetric(horizontal: spaceXs, vertical: spaceSm),
     child: Row(children: [
       Expanded(
-        child: Text(title, style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
+        child: Text(title, style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: isHebrew ? 0 : 1.5)),
       ),
       if (action != null)
         TextButton(
           onPressed: onActionTap,
           style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: const Size(50, 24)),
-          child: Text(action, style: const TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w700)),
+          child: Text(action, style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w700)),
         ),
     ]),
   );
@@ -1016,10 +1189,10 @@ Widget appEmptyState({required IconData icon, required String title, String? sub
             child: Icon(icon, color: textSecondary, size: 32),
           ),
           const SizedBox(height: spaceMd),
-          Text(title, style: const TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+          Text(title, style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
           if (subtitle != null) ...[
             const SizedBox(height: spaceXs),
-            Text(subtitle, style: const TextStyle(color: textSecondary, fontSize: 13), textAlign: TextAlign.center),
+            Text(subtitle, style: TextStyle(color: textSecondary, fontSize: 13), textAlign: TextAlign.center),
           ],
           if (action != null) ...[
             const SizedBox(height: spaceLg),
@@ -1066,10 +1239,10 @@ Widget appListTile({
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
+              Text(title, style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
               if (subtitle != null) ...[
                 const SizedBox(height: 2),
-                Text(subtitle, style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500)),
+                Text(subtitle, style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500)),
               ],
             ],
           ),
@@ -1120,10 +1293,10 @@ Widget appLoading({String? message}) {
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const CircularProgressIndicator(color: accentGreen, strokeWidth: 2.5),
+        CircularProgressIndicator(color: accentGreen, strokeWidth: 2.5),
         if (message != null) ...[
           const SizedBox(height: spaceMd),
-          Text(message, style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(message, style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
         ],
       ],
     ),
@@ -1307,8 +1480,8 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
     backgroundColor: cardColor,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     title: Row(children: [
-      const Icon(Icons.sports_soccer, color: accentGreen, size: 20), const SizedBox(width: 8),
-      Text(tr('פרטי הזמנה','Booking Details'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+      Icon(Icons.sports_soccer, color: accentGreen, size: 20), const SizedBox(width: 8),
+      Text(tr('פרטי הזמנה','Booking Details'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
     ]),
     content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
       _detailRow(Icons.sports_soccer_outlined, courtWord(b['sport'] as String? ?? kSportFootball, 'מגרש', 'Stadium'), b['stadiumName']??''),
@@ -1318,7 +1491,7 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
           child: Row(children: [
             Icon(_iconForType(b['bookingTypeIcon'] as String?), color: _colorForType(b['bookingTypeColor'] as String?), size: 16),
             const SizedBox(width: 8),
-            Text('${tr('סוג','Type')}: ', style: const TextStyle(color: textSecondary, fontSize: 13)),
+            Text('${tr('סוג','Type')}: ', style: TextStyle(color: textSecondary, fontSize: 13)),
             Expanded(child: Text(isHebrew ? (b['bookingType'] ?? '') : (b['bookingTypeEn'] ?? b['bookingType'] ?? ''), style: TextStyle(color: _colorForType(b['bookingTypeColor'] as String?), fontSize: 13, fontWeight: FontWeight.bold))),
           ]),
         ),
@@ -1341,32 +1514,32 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
           child: Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.phone_outlined, color: accentGreen, size: 16),
+              Icon(Icons.phone_outlined, color: accentGreen, size: 16),
               const SizedBox(width: 8),
               Flexible(
                 child: Text('${tr('טלפון','Phone')}: ',
-                  style: const TextStyle(color: textSecondary, fontSize: 13),
+                  style: TextStyle(color: textSecondary, fontSize: 13),
                   overflow: TextOverflow.ellipsis),
               ),
               Expanded(
                 child: Text(phone,
-                  style: const TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                  style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
                   overflow: TextOverflow.ellipsis, maxLines: 1),
               ),
-              const Icon(Icons.copy_outlined, color: accentGreen, size: 14),
+              Icon(Icons.copy_outlined, color: accentGreen, size: 14),
             ]),
           ),
         ),
       _detailRow(Icons.tag, tr('קוד','Code'), b['bookingCode']??''),
       const SizedBox(height: 12),
-      const Divider(color: borderColor), const SizedBox(height: 8),
+      Divider(color: borderColor), const SizedBox(height: 8),
       Text(tr('שחקנים (${players.length}/${b['maxPlayers'] ?? 18})','Players (${players.length}/${b['maxPlayers'] ?? 18})'),
-        style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+        style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
       const SizedBox(height: 8),
       Wrap(spacing: 6, runSpacing: 6, children: players.map((p) =>
         Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
-          child: Text(p.toString(), style: const TextStyle(color: accentGreen, fontSize: 12)))).toList()),
+          child: Text(p.toString(), style: TextStyle(color: accentGreen, fontSize: 12)))).toList()),
     ])),
     actions: [
       if (isAdmin && docId != null && () {
@@ -1381,10 +1554,10 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
             Navigator.pop(context);
             final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
               backgroundColor: cardColor,
-              title: Text(tr('ביטול הזמנה?','Cancel Booking?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-              content: Text(tr('האם לבטל את ההזמנה הזו?','Cancel this booking?'), style: const TextStyle(color: textSecondary)),
+              title: Text(tr('ביטול הזמנה?','Cancel Booking?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+              content: Text(tr('האם לבטל את ההזמנה הזו?','Cancel this booking?'), style: TextStyle(color: textSecondary)),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('לא','No'), style: const TextStyle(color: textSecondary))),
+                TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('לא','No'), style: TextStyle(color: textSecondary))),
                 TextButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('בטל','Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
               ],
             ));
@@ -1392,7 +1565,7 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
           },
           child: Text(tr('בטל הזמנה','Cancel Booking'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
         ),
-      TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('סגור','Close'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+      TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('סגור','Close'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
     ],
   ));
 }
@@ -1402,10 +1575,10 @@ Widget _detailRow(IconData icon, String label, String value) => Padding(
   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
     Icon(icon, color: accentGreen, size: 16), const SizedBox(width: 8),
     Flexible(
-      child: Text('$label: ', style: const TextStyle(color: textSecondary, fontSize: 13), overflow: TextOverflow.ellipsis),
+      child: Text('$label: ', style: TextStyle(color: textSecondary, fontSize: 13), overflow: TextOverflow.ellipsis),
     ),
     Expanded(
-      child: Text(value, style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis, maxLines: 2),
+      child: Text(value, style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis, maxLines: 2),
     ),
   ]),
 );
@@ -1450,17 +1623,17 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
         padding: const EdgeInsets.all(20),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Icon(Icons.add_circle_outline, color: accentGreen, size: 20), const SizedBox(width: 8),
-            Text(tr('הזמנה ידנית','Manual Booking'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            Icon(Icons.add_circle_outline, color: accentGreen, size: 20), const SizedBox(width: 8),
+            Text(tr('הזמנה ידנית','Manual Booking'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
           ]),
           const SizedBox(height: 4),
-          Text(stadiumName, style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13)),
+          Text(stadiumName, style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13)),
           const SizedBox(height: 16),
           _dialogTf(nameCtrl, tr('שם לקוח','Customer Name'), Icons.person_outline),
           const SizedBox(height: 12),
           _dialogTf(phoneCtrl, tr('מספר טלפון','Phone Number'), Icons.phone_outlined, type: TextInputType.phone),
           const SizedBox(height: 12),
-          Text(tr('תאריך','Date'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('תאריך','Date'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 6),
           // Wrap instead of ListView to avoid layout crash
           Wrap(spacing: 6, runSpacing: 6, children: days.map((d) {
@@ -1478,18 +1651,18 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
             );
           }).toList()),
           const SizedBox(height: 12),
-          Text(tr('שעה','Time'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('שעה','Time'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 6),
           DropdownButton<String>(
             value: selectedTime, isExpanded: true, dropdownColor: cardColor,
             items: courtSlots.map((s) {
               final label = '${s['start']} - ${s['end']}';
-              return DropdownMenuItem(value: label, child: Text(label, style: const TextStyle(color: textPrimary)));
+              return DropdownMenuItem(value: label, child: Text(label, style: TextStyle(color: textPrimary)));
             }).toList(),
             onChanged: (v) => setS(() => selectedTime = v!),
           ),
           const SizedBox(height: 12),
-          Text(tr('סוג הזמנה','Booking Type'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('סוג הזמנה','Booking Type'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: bookingTypes.map((t) {
             final isSel = selectedType == t || (selectedType?['name'] == t['name'] && selectedType?['icon'] == t['icon']);
@@ -1510,12 +1683,12 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
           const SizedBox(height: 10),
           Container(width: double.infinity, padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
-            child: Text('₪${selectedType?['price'] ?? price}/2hr', textAlign: TextAlign.center, style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+            child: Text('₪${selectedType?['price'] ?? price}/2hr', textAlign: TextAlign.center, style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
           const SizedBox(height: 20),
           Row(children: [
             Expanded(child: TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: Text(tr('ביטול','Cancel'), style: const TextStyle(color: textSecondary)),
+              child: Text(tr('ביטול','Cancel'), style: TextStyle(color: textSecondary)),
             )),
             const SizedBox(width: 8),
             Expanded(child: ElevatedButton(
@@ -1560,7 +1733,7 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
               },
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor),
               child: saving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
+                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
                 : Text(tr('הוסף','ADD'), style: const TextStyle(fontWeight: FontWeight.w900)),
             )),
           ]),
@@ -1571,11 +1744,11 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
 }
 
 Widget _dialogTf(TextEditingController c, String hint, IconData icon, {TextInputType? type}) => TextField(
-  controller: c, keyboardType: type, style: const TextStyle(color: textPrimary),
-  decoration: InputDecoration(hintText: hint, hintStyle: const TextStyle(color: textSecondary), prefixIcon: Icon(icon, color: textSecondary, size: 18), filled: true, fillColor: bgColor,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: accentGreen, width: 1.5))));
+  controller: c, keyboardType: type, style: TextStyle(color: textPrimary),
+  decoration: InputDecoration(hintText: hint, hintStyle: TextStyle(color: textSecondary), prefixIcon: Icon(icon, color: textSecondary, size: 18), filled: true, fillColor: bgColor,
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: accentGreen, width: 1.5))));
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1591,6 +1764,10 @@ void main() async {
   }
   // Padel/tennis clubs are shown to everyone, on web and in the native apps.
   enableDemoVenues();
+  if (kIsWeb) pendingJoinBookingId = Uri.base.queryParameters['join'];
+  try {
+    isLightMode = (await SharedPreferences.getInstance()).getBool('lightMode') ?? false;
+  } catch (_) {/* keep the default look */}
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Offline persistence — must be set before any Firestore call.
@@ -1636,23 +1813,10 @@ class _StadiumAppState extends State<StadiumApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'STADIUM', debugShowCheckedModeBanner: false,
-    theme: ThemeData.dark().copyWith(
-      scaffoldBackgroundColor: bgColor,
-      colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor),
-      // 'Heebo' supports both Hebrew and Latin glyphs; loaded from Google
-      // Fonts in web/index.html. On native platforms it falls back to the
-      // system font (which is fine for Hebrew on Android/iOS).
-      textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'Heebo'),
-      primaryTextTheme: ThemeData.dark().primaryTextTheme.apply(fontFamily: 'Heebo'),
-      pageTransitionsTheme: const PageTransitionsTheme(
-        builders: {
-          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.macOS: FadeUpwardsPageTransitionsBuilder(),
-          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
-        },
-      ),
+    theme: appThemeData(),
+    builder: (context, child) => Directionality(
+      textDirection: isHebrew ? TextDirection.rtl : TextDirection.ltr,
+      child: child!,
     ),
     home: const SplashScreen(),
   );
@@ -1700,7 +1864,7 @@ void toggleAppLanguage(BuildContext context) {
 
 Widget _langButton(BuildContext context) => TextButton(
   onPressed: () => toggleAppLanguage(context),
-  child: Text(isHebrew ? 'EN' : 'עב', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 13)),
+  child: Text(isHebrew ? 'EN' : 'עב', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 13)),
 );
 
 // ==================== SPLASH ====================
@@ -1743,7 +1907,8 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final user = FirebaseAuth.instance.currentUser;
     final Widget next = user == null ? const LoginScreen() : await homeScreenForUser(user);
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
+    final nav = Navigator.of(context);
+    nav.pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 600),
         pageBuilder: (_, __, ___) => next,
@@ -1751,6 +1916,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
             FadeTransition(opacity: animation, child: child),
       ),
     );
+    if (user != null) openPendingJoin(nav);
   }
 
   @override
@@ -1770,7 +1936,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.sports_soccer, color: accentGreen, size: 80),
+              Icon(Icons.sports_soccer, color: accentGreen, size: 80),
               const SizedBox(height: 24),
               AnimatedBuilder(
                 animation: _spacingAnim,
@@ -1787,10 +1953,10 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               const SizedBox(height: 8),
               Text(
                 tr('הזמן את המשחק שלך', 'BOOK YOUR GAME'),
-                style: const TextStyle(color: accentGreen, fontSize: 12, letterSpacing: 4),
+                style: TextStyle(color: accentGreen, fontSize: 12, letterSpacing: isHebrew ? 0 : 4),
               ),
               const SizedBox(height: 40),
-              const SizedBox(
+              SizedBox(
                 width: 24, height: 24,
                 child: CircularProgressIndicator(color: accentGreen, strokeWidth: 2),
               ),
@@ -1841,10 +2007,12 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       final Widget next = await homeScreenForUser(cred.user!);
       if (!mounted) return;
-      Navigator.of(context).pushAndRemoveUntil(
+      final nav = Navigator.of(context);
+      nav.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => next),
         (route) => false,
       );
+      openPendingJoin(nav);
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1887,13 +2055,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: accentGreen.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: const Icon(Icons.lock_reset_rounded, color: accentGreen, size: 32),
+                      child: Icon(Icons.lock_reset_rounded, color: accentGreen, size: 32),
                     ),
                   ),
                   const SizedBox(height: spaceMd),
                   Text(
                     tr('שיחזור סיסמה', 'Reset Password'),
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900,
                     ),
                     textAlign: TextAlign.center,
@@ -1902,7 +2070,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     tr('הזן את האימייל שלך ונשלח לך קישור איפוס',
                        'Enter your email and we\'ll send you a reset link'),
-                    style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
+                    style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: spaceXs),
@@ -1916,12 +2084,12 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.warning_amber_rounded, color: colorWarning, size: 14),
+                        Icon(Icons.warning_amber_rounded, color: colorWarning, size: 14),
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
                             tr('לא רואה? בדוק בספאם 📬', 'Not in inbox? Check SPAM 📬'),
-                            style: const TextStyle(color: colorWarning, fontSize: 10, fontWeight: FontWeight.w700),
+                            style: TextStyle(color: colorWarning, fontSize: 10, fontWeight: FontWeight.w700),
                           ),
                         ),
                       ],
@@ -1931,25 +2099,26 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextField(
                     controller: emailCtrl,
                     keyboardType: TextInputType.emailAddress,
-                    style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                    textDirection: TextDirection.ltr,
+                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                     decoration: InputDecoration(
                       labelText: tr('אימייל', 'Email'),
-                      prefixIcon: const Icon(Icons.email_outlined, color: textSecondary, size: 20),
-                      labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                      prefixIcon: Icon(Icons.email_outlined, color: textSecondary, size: 20),
+                      labelStyle: TextStyle(color: textSecondary, fontSize: 13),
                       filled: true,
-                      fillColor: bgSecondary,
+                      fillColor: cardColor,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(radiusMd),
-                        borderSide: const BorderSide(color: borderColor),
+                        borderSide: BorderSide(color: borderColor),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(radiusMd),
-                        borderSide: const BorderSide(color: borderColor),
+                        borderSide: BorderSide(color: borderColor),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(radiusMd),
-                        borderSide: const BorderSide(color: accentGreen, width: 2),
+                        borderSide: BorderSide(color: accentGreen, width: 2),
                       ),
                     ),
                   ),
@@ -1959,13 +2128,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: borderColor),
+                          side: BorderSide(color: borderColor),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                         ),
                         child: Text(
                           tr('ביטול', 'Cancel'),
-                          style: const TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700),
+                          style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -2006,7 +2175,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           }
                         },
                         icon: sending
-                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: bgColor))
+                            ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: bgColor))
                             : const Icon(Icons.send_rounded, size: 18),
                         label: Text(
                           sending ? tr('שולח...', 'Sending...') : tr('שלח קישור', 'Send Link'),
@@ -2070,11 +2239,11 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                         ),
-                        child: const Icon(Icons.stadium_rounded, color: bgColor, size: 36),
+                        child: Icon(Icons.stadium_rounded, color: bgColor, size: 36),
                       ),
                     ),
                     const SizedBox(height: spaceLg),
-                    const Text(
+                    Text(
                       'STADIUM',
                       style: TextStyle(
                         color: textPrimary,
@@ -2087,7 +2256,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: spaceXs),
                     Text(
                       tr('ניהול מגרשים מקצועי', 'Professional venue management'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: textSecondary,
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -2108,7 +2277,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         children: [
                           Text(
                             tr('כניסה לחשבון', 'Sign In'),
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: textPrimary,
                               fontSize: 20,
                               fontWeight: FontWeight.w900,
@@ -2117,7 +2286,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           const SizedBox(height: 4),
                           Text(
                             tr('הזן את פרטיך כדי להמשיך', 'Enter your credentials to continue'),
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: textSecondary,
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
@@ -2139,11 +2308,12 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: TextFormField(
                               controller: _passCtrl,
                               obscureText: _obscurePass,
-                              style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                              textDirection: TextDirection.ltr,
+                              style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                               validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
                               decoration: InputDecoration(
                                 labelText: tr('סיסמה', 'Password'),
-                                prefixIcon: const Icon(Icons.lock_outline, color: textSecondary, size: 20),
+                                prefixIcon: Icon(Icons.lock_outline, color: textSecondary, size: 20),
                                 suffixIcon: IconButton(
                                   onPressed: () => setState(() => _obscurePass = !_obscurePass),
                                   icon: Icon(
@@ -2151,21 +2321,21 @@ class _LoginScreenState extends State<LoginScreen> {
                                     color: textSecondary, size: 20,
                                   ),
                                 ),
-                                labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                                labelStyle: TextStyle(color: textSecondary, fontSize: 13),
                                 filled: true,
-                                fillColor: bgSecondary,
+                                fillColor: cardColor,
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(radiusMd),
-                                  borderSide: const BorderSide(color: borderColor),
+                                  borderSide: BorderSide(color: borderColor),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(radiusMd),
-                                  borderSide: const BorderSide(color: borderColor),
+                                  borderSide: BorderSide(color: borderColor),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(radiusMd),
-                                  borderSide: const BorderSide(color: accentGreen, width: 2),
+                                  borderSide: BorderSide(color: accentGreen, width: 2),
                                 ),
                               ),
                             ),
@@ -2194,7 +2364,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         child: Text(
                           tr('שכחתי סיסמה?', 'Forgot password?'),
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: accentGreen,
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -2209,7 +2379,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       children: [
                         Text(
                           tr('אין לך חשבון? ', "Don't have an account? "),
-                          style: const TextStyle(color: textSecondary, fontSize: 13),
+                          style: TextStyle(color: textSecondary, fontSize: 13),
                         ),
                         InkWell(
                           onTap: () {
@@ -2217,7 +2387,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           },
                           child: Text(
                             tr('הירשם', 'Register'),
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: accentGreen,
                               fontSize: 13,
                               fontWeight: FontWeight.w800,
@@ -2230,7 +2400,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: spaceLg),
 
                     Center(
-                      child: InkWell(
+                      child: Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
+                      InkWell(
                         onTap: () => toggleAppLanguage(context),
                         borderRadius: BorderRadius.circular(radiusSm),
                         child: Container(
@@ -2243,11 +2414,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.language, color: textSecondary, size: 14),
+                              Icon(Icons.language, color: textSecondary, size: 14),
                               const SizedBox(width: 6),
                               Text(
                                 isHebrew ? 'English' : 'עברית',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: textPrimary,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,
@@ -2257,6 +2428,30 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
+                      InkWell(
+                        onTap: toggleAppTheme,
+                        borderRadius: BorderRadius.circular(radiusSm),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: cardColor,
+                            borderRadius: BorderRadius.circular(radiusSm),
+                            border: Border.all(color: borderColor),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(isLightMode ? Icons.dark_mode_outlined : Icons.light_mode_outlined, color: textSecondary, size: 14),
+                              const SizedBox(width: 6),
+                              Text(
+                                isLightMode ? tr('מצב כהה', 'Dark mode') : tr('מצב בהיר', 'Light mode'),
+                                style: TextStyle(color: textPrimary, fontSize: 12, fontWeight: FontWeight.w700),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      ]),
                     ),
                   ],
                 ),
@@ -2283,7 +2478,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _pass2Ctrl = TextEditingController();
-  final _dobCtrl = TextEditingController();
   final _cityCtrl = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _loading = false;
@@ -2297,30 +2491,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _emailCtrl.dispose();
     _passCtrl.dispose();
     _pass2Ctrl.dispose();
-    _dobCtrl.dispose();
     _cityCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickDob() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime(now.year - 20, now.month, now.day),
-      firstDate: DateTime(1920),
-      lastDate: DateTime(now.year - 5),
-      builder: (ctx, child) => Theme(
-        data: ThemeData.dark().copyWith(
-          colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: bgColor),
-        ),
-        child: child!,
-      ),
-    );
-    if (picked != null) {
-      setState(() {
-        _dobCtrl.text = '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
-      });
-    }
   }
 
   Future<void> _register() async {
@@ -2336,7 +2508,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'name': _nameCtrl.text.trim(),
         'phone': _phoneCtrl.text.trim(),
         'email': _emailCtrl.text.trim(),
-        'dob': _dobCtrl.text.trim(),
         'city': _cityCtrl.text.trim(),
         'emailVerified': false,
         'createdAt': FieldValue.serverTimestamp(),
@@ -2365,12 +2536,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         color: accentGreen.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Icon(Icons.mark_email_read_rounded, color: accentGreen, size: 40),
+                      child: Icon(Icons.mark_email_read_rounded, color: accentGreen, size: 40),
                     ),
                     const SizedBox(height: spaceMd),
                     Text(
                       tr('✅ נרשמת בהצלחה!', '✅ Successfully registered!'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900,
                       ),
                       textAlign: TextAlign.center,
@@ -2379,7 +2550,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     Text(
                       tr('שלחנו אימייל אימות ל-${_emailCtrl.text.trim()}\nאנא בדוק את תיבת הדואר שלך',
                          'We sent a verification email to ${_emailCtrl.text.trim()}\nPlease check your inbox'),
-                      style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
+                      style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: spaceSm),
@@ -2393,13 +2564,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.warning_amber_rounded, color: colorWarning, size: 16),
+                          Icon(Icons.warning_amber_rounded, color: colorWarning, size: 16),
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
                               tr('לא רואה? בדוק בתיקיית הספאם 📬',
                                  "Don't see it? Check your SPAM folder 📬"),
-                              style: const TextStyle(color: colorWarning, fontSize: 11, fontWeight: FontWeight.w700),
+                              style: TextStyle(color: colorWarning, fontSize: 11, fontWeight: FontWeight.w700),
                               textAlign: TextAlign.center,
                             ),
                           ),
@@ -2418,10 +2589,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           // the dialog route.
                           Navigator.pop(ctx);
                           if (mounted) {
-                            Navigator.of(context).pushAndRemoveUntil(
+                            final nav = Navigator.of(context);
+                            nav.pushAndRemoveUntil(
                               MaterialPageRoute(builder: (_) => const VenueSelectionScreen()),
                               (route) => false,
                             );
+                            openPendingJoin(nav);
                           }
                         },
                         style: ElevatedButton.styleFrom(
@@ -2497,7 +2670,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             border: Border.all(color: borderColor),
                           ),
                           child: Icon(
-                            isHebrew ? Icons.arrow_forward : Icons.arrow_back,
+                            Icons.arrow_back,
                             color: textPrimary, size: 18,
                           ),
                         ),
@@ -2513,13 +2686,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: const Icon(Icons.person_add_alt_1_rounded, color: bgColor, size: 32),
+                        child: Icon(Icons.person_add_alt_1_rounded, color: bgColor, size: 32),
                       ),
                     ),
                     const SizedBox(height: spaceMd),
                     Text(
                       tr('יצירת חשבון', 'Create Account'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: textPrimary,
                         fontSize: 24,
                         fontWeight: FontWeight.w900,
@@ -2529,7 +2702,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const SizedBox(height: 4),
                     Text(
                       tr('הצטרף ל-STADIUM וקבל גישה למתחמים', 'Join STADIUM and access venues'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: textSecondary,
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -2563,15 +2736,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                           const SizedBox(height: spaceMd),
                           appTextField(
-                            controller: _dobCtrl,
-                            label: tr('תאריך לידה', 'Date of Birth'),
-                            icon: Icons.cake_outlined,
-                            readOnly: true,
-                            onTap: _pickDob,
-                            validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
-                          ),
-                          const SizedBox(height: spaceMd),
-                          appTextField(
                             controller: _cityCtrl,
                             label: tr('עיר', 'City'),
                             icon: Icons.location_city_outlined,
@@ -2588,7 +2752,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           TextFormField(
                             controller: _passCtrl,
                             obscureText: _obscurePass,
-                            style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                            textDirection: TextDirection.ltr,
+                            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                             validator: (v) {
                               if (v == null || v.isEmpty) return tr('שדה חובה', 'Required');
                               if (v.length < 6) return tr('מינימום 6 תווים', 'Min 6 characters');
@@ -2596,7 +2761,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             },
                             decoration: InputDecoration(
                               labelText: tr('סיסמה', 'Password'),
-                              prefixIcon: const Icon(Icons.lock_outline, color: textSecondary, size: 20),
+                              prefixIcon: Icon(Icons.lock_outline, color: textSecondary, size: 20),
                               suffixIcon: IconButton(
                                 onPressed: () => setState(() => _obscurePass = !_obscurePass),
                                 icon: Icon(
@@ -2604,21 +2769,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   color: textSecondary, size: 20,
                                 ),
                               ),
-                              labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                              labelStyle: TextStyle(color: textSecondary, fontSize: 13),
                               filled: true,
-                              fillColor: bgSecondary,
+                              fillColor: cardColor,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
+                                borderSide: BorderSide(color: borderColor),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
+                                borderSide: BorderSide(color: borderColor),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: accentGreen, width: 2),
+                                borderSide: BorderSide(color: accentGreen, width: 2),
                               ),
                             ),
                           ),
@@ -2626,7 +2791,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           TextFormField(
                             controller: _pass2Ctrl,
                             obscureText: _obscurePass2,
-                            style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                            textDirection: TextDirection.ltr,
+                            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                             validator: (v) {
                               if (v == null || v.isEmpty) return tr('שדה חובה', 'Required');
                               if (v != _passCtrl.text) return tr('הסיסמאות לא תואמות', 'Passwords do not match');
@@ -2634,7 +2800,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             },
                             decoration: InputDecoration(
                               labelText: tr('אימות סיסמה', 'Confirm Password'),
-                              prefixIcon: const Icon(Icons.lock_outline, color: textSecondary, size: 20),
+                              prefixIcon: Icon(Icons.lock_outline, color: textSecondary, size: 20),
                               suffixIcon: IconButton(
                                 onPressed: () => setState(() => _obscurePass2 = !_obscurePass2),
                                 icon: Icon(
@@ -2642,25 +2808,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   color: textSecondary, size: 20,
                                 ),
                               ),
-                              labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                              labelStyle: TextStyle(color: textSecondary, fontSize: 13),
                               filled: true,
-                              fillColor: bgSecondary,
+                              fillColor: cardColor,
                               contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
+                                borderSide: BorderSide(color: borderColor),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: borderColor),
+                                borderSide: BorderSide(color: borderColor),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: accentGreen, width: 2),
+                                borderSide: BorderSide(color: accentGreen, width: 2),
                               ),
                               errorBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(radiusMd),
-                                borderSide: const BorderSide(color: colorError),
+                                borderSide: BorderSide(color: colorError),
                               ),
                             ),
                           ),
@@ -2705,9 +2871,9 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
     backgroundColor: bgColor,
     appBar: AdminAppBar(
       title: Row(children: [
-        const Icon(Icons.shield_outlined, color: Colors.amber, size: 20),
+        Icon(Icons.shield_outlined, color: accentAmber, size: 20),
         const SizedBox(width: 8),
-        Text(tr('סופר אדמין', 'SUPER ADMIN'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2)),
+        Text(tr('סופר אדמין', 'SUPER ADMIN'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
       ]),
       bottom: TabBar(controller: _tab, indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
         isScrollable: _isOwner,
@@ -2727,7 +2893,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
   Widget _buildOverview() => StreamBuilder(
     stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
     builder: (context, snap) {
-      if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+      if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
       final docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
       final allBookings = docs.map((d) => d.data()).toList();
       int totalP = 0; Map<String, int> sCount = {}, sRev = {};
@@ -2743,7 +2909,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
         _secTitle(tr('סקירה כללית', 'OVERVIEW')), const SizedBox(height: 12),
         Row(children: [Expanded(child: _statCard(tr('הזמנות', 'BOOKINGS'), '${docs.length}', Icons.calendar_month, accentGreen)), const SizedBox(width: 12), Expanded(child: _statCard(tr('שחקנים', 'PLAYERS'), '$totalP', Icons.people_outline, Colors.blue))]),
         const SizedBox(height: 12),
-        Row(children: [Expanded(child: _statCard(tr('מגרשים', 'STADIUMS'), '${allStadiums.length}', Icons.sports_soccer, Colors.orange)), const SizedBox(width: 12), Expanded(child: _statCard(tr('הכנסות', 'REVENUE'), '₪${sRev.values.fold(0, (a, b) => a + b)}', Icons.attach_money, Colors.amber))]),
+        Row(children: [Expanded(child: _statCard(tr('מגרשים', 'STADIUMS'), '${allStadiums.length}', Icons.sports_soccer, colorWarning)), const SizedBox(width: 12), Expanded(child: _statCard(tr('הכנסות', 'REVENUE'), '₪${sRev.values.fold(0, (a, b) => a + b)}', Icons.attach_money, accentAmber))]),
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, child: ElevatedButton.icon(
           onPressed: () => exportToCSV(context, allBookings, 'all_bookings'),
@@ -2754,11 +2920,11 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, child: OutlinedButton.icon(
           onPressed: () => navigateTo(context, const AppContactConfigScreen()),
-          icon: const Icon(Icons.contact_support_outlined, size: 18, color: Colors.amber),
+          icon: Icon(Icons.contact_support_outlined, size: 18, color: accentAmber),
           label: Text(tr('ערוך פרטי קשר אפליקציה', 'Edit App Contact Info'),
-            style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.w800)),
+            style: TextStyle(color: accentAmber, fontSize: 13, fontWeight: FontWeight.w800)),
           style: OutlinedButton.styleFrom(
-            side: BorderSide(color: Colors.amber.withValues(alpha: 0.4)),
+            side: BorderSide(color: accentAmber.withValues(alpha: 0.4)),
             backgroundColor: cardColor,
             padding: const EdgeInsets.symmetric(vertical: 14),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
@@ -2773,7 +2939,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
   Widget _buildAllBookings() => StreamBuilder(
     stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
     builder: (context, snap) {
-      if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+      if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
       var docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
       if (_search.isNotEmpty) {
         docs = docs.where((d) {
@@ -2787,15 +2953,15 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
       return Column(children: [
         Padding(padding: const EdgeInsets.all(12), child: TextField(
           onChanged: (v) => setState(() => _search = v),
-          style: const TextStyle(color: textPrimary),
+          style: TextStyle(color: textPrimary),
           decoration: InputDecoration(
             hintText: tr('חפש לפי שם, תאריך, מגרש...', 'Search by name, date, stadium...'),
-            hintStyle: const TextStyle(color: textSecondary, fontSize: 13),
-            prefixIcon: const Icon(Icons.search, color: textSecondary, size: 20),
+            hintStyle: TextStyle(color: textSecondary, fontSize: 13),
+            prefixIcon: Icon(Icons.search, color: textSecondary, size: 20),
             filled: true, fillColor: cardColor,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: borderColor)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: borderColor)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: accentGreen, width: 1.5)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: borderColor)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: borderColor)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: accentGreen, width: 1.5)),
           ),
         )),
         Expanded(child: ListView.builder(padding: const EdgeInsets.fromLTRB(12,0,12,12), itemCount: docs.length, itemBuilder: (_, i) {
@@ -2814,7 +2980,7 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
     return StatefulBuilder(builder: (ctx, setSS) => StreamBuilder(
       stream: FirebaseFirestore.instance.collection('bookings').snapshots(),
       builder: (context, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final docs = snap.data!.docs.where((d) => d.data()['isDemo'] != true).toList(); // hide demo bookings
         final now = DateTime.now();
 
@@ -2874,26 +3040,26 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
               Expanded(child: GestureDetector(
                 onTap: () async {
                   final picked = await showDatePicker(context: context, initialDate: fromDate, firstDate: DateTime(2024), lastDate: DateTime.now(),
-                    builder: (_, child) => Theme(data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor)), child: child!));
+                    builder: (_, child) => Theme(data: appThemeData(), child: child!));
                   if (picked != null) setSS(() => fromDate = picked);
                 },
                 child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(10), border: Border.all(color: accentGreen.withValues(alpha: 0.4))),
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.calendar_today_outlined, color: accentGreen, size: 16), const SizedBox(width: 6),
-                    Text('${fromDate.day}/${fromDate.month}/${fromDate.year}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                    Icon(Icons.calendar_today_outlined, color: accentGreen, size: 16), const SizedBox(width: 6),
+                    Text('${fromDate.day}/${fromDate.month}/${fromDate.year}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
                   ])),
               )),
-              const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('→', style: TextStyle(color: textSecondary, fontSize: 18))),
+              Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('→', style: TextStyle(color: textSecondary, fontSize: 18))),
               Expanded(child: GestureDetector(
                 onTap: () async {
                   final picked = await showDatePicker(context: context, initialDate: toDate, firstDate: DateTime(2024), lastDate: DateTime.now().add(const Duration(days: 1)),
-                    builder: (_, child) => Theme(data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor)), child: child!));
+                    builder: (_, child) => Theme(data: appThemeData(), child: child!));
                   if (picked != null) setSS(() => toDate = picked);
                 },
                 child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(10), border: Border.all(color: accentGreen.withValues(alpha: 0.4))),
                   child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.calendar_today_outlined, color: accentGreen, size: 16), const SizedBox(width: 6),
-                    Text('${toDate.day}/${toDate.month}/${toDate.year}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                    Icon(Icons.calendar_today_outlined, color: accentGreen, size: 16), const SizedBox(width: 6),
+                    Text('${toDate.day}/${toDate.month}/${toDate.year}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
                   ])),
               )),
             ]),
@@ -2901,14 +3067,14 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
           ],
           // תוצאות
           Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12), border: Border.all(color: accentGreen.withValues(alpha: 0.2))),
-            child: Row(children: [const Icon(Icons.bar_chart, color: accentGreen, size: 18), const SizedBox(width: 8), Text('${tr('דוח','Report')}: ${periodLabel()}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))])),
+            child: Row(children: [Icon(Icons.bar_chart, color: accentGreen, size: 18), const SizedBox(width: 8), Text('${tr('דוח','Report')}: ${periodLabel()}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))])),
           const SizedBox(height: 12),
           Row(children: [
             Expanded(child: _statCard(tr('הזמנות','BOOKINGS'), '${filtered.length}', Icons.calendar_month, accentGreen)),
             const SizedBox(width: 8),
             Expanded(child: _statCard(tr('שחקנים','PLAYERS'), '$players', Icons.people_outline, Colors.blue)),
             const SizedBox(width: 8),
-            Expanded(child: _statCard(tr('הכנסות','REVENUE'), '₪$rev', Icons.attach_money, Colors.amber)),
+            Expanded(child: _statCard(tr('הכנסות','REVENUE'), '₪$rev', Icons.attach_money, accentAmber)),
           ]),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: ElevatedButton.icon(
@@ -2926,16 +3092,16 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
             return Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)),
               child: Row(children: [
-                const Icon(Icons.sports_soccer, color: accentGreen, size: 20), const SizedBox(width: 10),
+                Icon(Icons.sports_soccer, color: accentGreen, size: 20), const SizedBox(width: 10),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(s['name'], style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-                  Text('${sBookings.length} ${tr('הזמנות','bookings')}', style: const TextStyle(color: textSecondary, fontSize: 12)),
+                  Text(s['name'], style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+                  Text('${sBookings.length} ${tr('הזמנות','bookings')}', style: TextStyle(color: textSecondary, fontSize: 12)),
                 ])),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  Text('₪$sRev', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('₪$sRev', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 16)),
                   if (sBookings.isNotEmpty) TextButton(
                     onPressed: () => exportToCSV(context, sBookings.map((d) => d.data()).toList(), '${s['id']}_report'),
-                    child: Text(tr('ייצוא','Export'), style: const TextStyle(color: accentGreen, fontSize: 11)),
+                    child: Text(tr('ייצוא','Export'), style: TextStyle(color: accentGreen, fontSize: 11)),
                   ),
                 ]),
               ]));
@@ -2954,9 +3120,9 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> with SingleTickerPr
   Widget _perfCard(String name, int b, int r) => Container(
     margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor)),
-    child: Row(children: [Container(width: 44, height: 44, decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.sports_soccer, color: accentGreen, size: 22)), const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)), Text('$b ${tr('הזמנות', 'bookings')}', style: const TextStyle(color: textSecondary, fontSize: 12))])),
-      Text('₪$r', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 16))]),
+    child: Row(children: [Container(width: 44, height: 44, decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)), child: Icon(Icons.sports_soccer, color: accentGreen, size: 22)), const SizedBox(width: 12),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(name, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)), Text('$b ${tr('הזמנות', 'bookings')}', style: TextStyle(color: textSecondary, fontSize: 12))])),
+      Text('₪$r', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 16))]),
   );
 }
 
@@ -2973,21 +3139,21 @@ Widget _adminBookCard(Map<String,dynamic> b, {required String docId, required Bu
         Row(children: [
           Icon(_iconForType(b['bookingTypeIcon'] as String?), color: _colorForType(b['bookingTypeColor'] as String?), size: 16),
           const SizedBox(width: 6),
-          Expanded(child: Text(b['stadiumName']??'', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 14), overflow: TextOverflow.ellipsis)),
+          Expanded(child: Text(b['stadiumName']??'', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 14), overflow: TextOverflow.ellipsis)),
           if (isManual) Container(margin: const EdgeInsets.only(right: 6), padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2), decoration: BoxDecoration(color: Colors.purple.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(4)), child: const Text('MANUAL', style: TextStyle(color: Colors.purple, fontSize: 9, fontWeight: FontWeight.bold))),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.amber.withValues(alpha: 0.3))), child: Text(b['bookingCode']??'', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 12))),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: accentAmber.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: accentAmber.withValues(alpha: 0.3))), child: Text(b['bookingCode']??'', style: TextStyle(color: accentAmber, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 12))),
           const SizedBox(width: 6),
           const Icon(Icons.info_outline, color: Colors.blue, size: 16),
         ]),
         const SizedBox(height: 6),
-        Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: const TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
         if (phone.isNotEmpty) Row(children: [
-          const Icon(Icons.phone_outlined, color: accentGreen, size: 12),
+          Icon(Icons.phone_outlined, color: accentGreen, size: 12),
           const SizedBox(width: 4),
-          Expanded(child: Text(phone, style: const TextStyle(color: accentGreen, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
+          Expanded(child: Text(phone, style: TextStyle(color: accentGreen, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
         ]),
         const SizedBox(height: 4),
-        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
@@ -3005,9 +3171,9 @@ class _MD9AdminScreenState extends State<MD9AdminScreen> with SingleTickerProvid
     backgroundColor: bgColor,
     appBar: AdminAppBar(
       title: Row(children: [
-        const Icon(Icons.shield_outlined, color: Colors.amber, size: 20),
+        Icon(Icons.shield_outlined, color: accentAmber, size: 20),
         const SizedBox(width: 8),
-        Text(tr('אדמין SM', 'SM ADMIN'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2)),
+        Text(tr('אדמין SM', 'SM ADMIN'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
       ]),
       bottom: TabBar(controller: _tab, indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
         tabs: [Tab(text: tr('סקירה', 'DASHBOARD')), const Tab(text: 'SM MAIN'), const Tab(text: 'SM 2')]),
@@ -3043,7 +3209,7 @@ class MD9OverviewTab extends StatelessWidget {
     return StreamBuilder(
       stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', whereIn: ['SM MAIN', 'SM 2']).snapshots(),
       builder: (context, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
 
         final now = DateTime.now();
         final todayStr = '${now.day}/${now.month}';
@@ -3123,19 +3289,19 @@ class MD9OverviewTab extends StatelessWidget {
                   color: accentGreen.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.dashboard_rounded, color: accentGreen, size: 26),
+                child: Icon(Icons.dashboard_rounded, color: accentGreen, size: 26),
               ),
               const SizedBox(width: spaceMd),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(
                     tr('סקירה כללית', 'OVERVIEW'),
-                    style: const TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 2),
+                    style: TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: isHebrew ? 0 : 2),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${tr('היום', 'Today')} • $todayStr',
-                    style: const TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
+                    style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
                   ),
                 ]),
               ),
@@ -3147,7 +3313,7 @@ class MD9OverviewTab extends StatelessWidget {
           Row(children: [
             Expanded(child: _kpi(tr('הזמנות היום', 'BOOKINGS'), '$todayBookings', Icons.calendar_today_rounded, accentGreen)),
             const SizedBox(width: spaceSm),
-            Expanded(child: _kpi(tr('הכנסות היום', 'REVENUE'), '₪$todayRevenue', Icons.payments_rounded, Colors.amber)),
+            Expanded(child: _kpi(tr('הכנסות היום', 'REVENUE'), '₪$todayRevenue', Icons.payments_rounded, accentAmber)),
           ]),
           const SizedBox(height: spaceSm),
           Row(children: [
@@ -3203,7 +3369,7 @@ class MD9OverviewTab extends StatelessWidget {
                 color: accentGreen.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(radiusXs),
               ),
-              child: Text('${upcoming.length}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 12)),
+              child: Text('${upcoming.length}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 12)),
             ),
           ]),
           const SizedBox(height: spaceSm),
@@ -3216,9 +3382,9 @@ class MD9OverviewTab extends StatelessWidget {
                 border: Border.all(color: borderColor),
               ),
               child: Row(children: [
-                const Icon(Icons.event_busy_outlined, color: textSecondary, size: 24),
+                Icon(Icons.event_busy_outlined, color: textSecondary, size: 24),
                 const SizedBox(width: spaceSm),
-                Expanded(child: Text(tr('אין הזמנות ב-24 השעות הקרובות', 'No bookings in the next 24 hours'), style: const TextStyle(color: textSecondary, fontSize: 13))),
+                Expanded(child: Text(tr('אין הזמנות ב-24 השעות הקרובות', 'No bookings in the next 24 hours'), style: TextStyle(color: textSecondary, fontSize: 13))),
               ]),
             )
           else
@@ -3251,10 +3417,10 @@ class MD9OverviewTab extends StatelessWidget {
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: () => exportToCSV(context, allBookings, 'md9_bookings'),
-              icon: const Icon(Icons.download_outlined, size: 18, color: accentGreen),
+              icon: Icon(Icons.download_outlined, size: 18, color: accentGreen),
               label: Text(
                 tr('ייצוא כל הזמנות SM', 'Export All SM Bookings'),
-                style: const TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w800),
+                style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w800),
               ),
               style: OutlinedButton.styleFrom(
                 side: BorderSide(color: accentGreen.withValues(alpha: 0.4)),
@@ -3291,7 +3457,7 @@ class MD9OverviewTab extends StatelessWidget {
           const SizedBox(height: spaceSm),
           Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: textSecondary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(label, style: TextStyle(color: textSecondary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: isHebrew ? 0 : 1.5), maxLines: 1, overflow: TextOverflow.ellipsis),
         ],
       ),
     );
@@ -3312,28 +3478,28 @@ class MD9OverviewTab extends StatelessWidget {
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
-          child: const Icon(Icons.sports_soccer_rounded, color: accentGreen, size: 22),
+          child: Icon(Icons.sports_soccer_rounded, color: accentGreen, size: 22),
         ),
         const SizedBox(width: spaceSm),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(name, style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1)),
+              Text(name, style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1)),
               const SizedBox(height: 4),
               Row(children: [
                 Icon(Icons.calendar_today_outlined, color: textSecondary, size: 12),
                 const SizedBox(width: 4),
-                Text('$b', style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                Text('$b', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
                 const SizedBox(width: 12),
                 Icon(Icons.people_outline, color: textSecondary, size: 12),
                 const SizedBox(width: 4),
-                Text('$p', style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                Text('$p', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
               ]),
             ],
           ),
         ),
-        Text('₪$r', style: const TextStyle(color: accentGreen, fontSize: 16, fontWeight: FontWeight.w900)),
+        Text('₪$r', style: TextStyle(color: accentGreen, fontSize: 16, fontWeight: FontWeight.w900)),
       ]),
     );
   }
@@ -3365,7 +3531,7 @@ class MD9OverviewTab extends StatelessWidget {
             isToday ? tr('היום', 'TODAY') : tr('מחר', 'TOMORROW'),
             style: TextStyle(
               color: isToday ? accentGreen : Colors.blue,
-              fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1,
+              fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1,
             ),
           ),
         ),
@@ -3376,14 +3542,14 @@ class MD9OverviewTab extends StatelessWidget {
             children: [
               Text(
                 '$stadium • $time',
-                style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
+                style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
                 maxLines: 1, overflow: TextOverflow.ellipsis,
               ),
               if (user.isNotEmpty || phone.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(
                   [user, phone].where((s) => s.isNotEmpty).join(' • '),
-                  style: const TextStyle(color: textSecondary, fontSize: 11),
+                  style: TextStyle(color: textSecondary, fontSize: 11),
                   maxLines: 1, overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -3528,7 +3694,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
         return AlertDialog(
           backgroundColor: cardColor,
           title: Text(tr('עריכת משבצת', 'Edit Slot'),
-              style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+              style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             // Previous slot boundary hint
             if (index > 0)
@@ -3536,18 +3702,18 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   tr('המשבצת הקודמת מסתיימת ב-$prevEnd', 'Previous slot ends at $prevEnd'),
-                  style: const TextStyle(color: textSecondary, fontSize: 11)),
+                  style: TextStyle(color: textSecondary, fontSize: 11)),
               ),
 
             // Start time
             Text(tr('שעת התחלה', 'Start time'),
-                style: const TextStyle(color: textSecondary, fontSize: 12, letterSpacing: 1)),
+                style: TextStyle(color: textSecondary, fontSize: 12, letterSpacing: isHebrew ? 0 : 1)),
             const SizedBox(height: 6),
             DropdownButton<String>(
               value: selStart, dropdownColor: cardColor, isExpanded: true,
               items: allStartTimes.map((t) => DropdownMenuItem(
                 value: t,
-                child: Text(t, style: const TextStyle(color: textPrimary)))).toList(),
+                child: Text(t, style: TextStyle(color: textPrimary)))).toList(),
               onChanged: (v) => setS(() {
                 selStart = v!;
                 selEnd = _addTwoHours(selStart);
@@ -3557,14 +3723,14 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
 
             // End time
             Text(tr('שעת סיום', 'End time'),
-                style: const TextStyle(color: textSecondary, fontSize: 12, letterSpacing: 1)),
+                style: TextStyle(color: textSecondary, fontSize: 12, letterSpacing: isHebrew ? 0 : 1)),
             const SizedBox(height: 6),
             DropdownButton<String>(
               value: allStartTimes.contains(selEnd) ? selEnd : allStartTimes.last,
               dropdownColor: cardColor, isExpanded: true,
               items: allStartTimes.map((t) => DropdownMenuItem(
                 value: t,
-                child: Text(t, style: const TextStyle(color: textPrimary)))).toList(),
+                child: Text(t, style: TextStyle(color: textPrimary)))).toList(),
               onChanged: (v) => setS(() => selEnd = v!),
             ),
 
@@ -3574,7 +3740,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   tr('המשבצת הבאה מתחילה ב-$nextStart', 'Next slot starts at $nextStart'),
-                  style: const TextStyle(color: textSecondary, fontSize: 11)),
+                  style: TextStyle(color: textSecondary, fontSize: 11)),
               ),
 
             // Overlap error
@@ -3601,7 +3767,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: Text(tr('ביטול', 'Cancel'),
-                  style: const TextStyle(color: textSecondary))),
+                  style: TextStyle(color: textSecondary))),
             ElevatedButton(
               onPressed: overlap ? null : () async {
                 final newSlots = List<Map<String,String>>.from(currentSlots);
@@ -3676,43 +3842,43 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   const SizedBox(height: spaceMd),
                   Text(
                     tr('הזמנה קבועה שבועית', 'Weekly Recurring Block'),
-                    style: const TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
+                    style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: spaceLg),
                   // Day of week
-                  Text(tr('יום בשבוע', 'Day of Week'), style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(tr('יום בשבוע', 'Day of Week'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<int>(
                     value: dayOfWeek,
                     dropdownColor: cardColor,
-                    style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                     decoration: InputDecoration(
                       filled: true,
                       fillColor: bgSecondary,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
                     ),
                     items: List.generate(7, (i) => DropdownMenuItem(value: i, child: Text(dayNames[i]))),
                     onChanged: (v) => setS(() => dayOfWeek = v),
                   ),
                   const SizedBox(height: spaceMd),
                   // Time slot
-                  Text(tr('שעה', 'Time'), style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(tr('שעה', 'Time'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   DropdownButtonFormField<String>(
                     value: selectedTime,
                     dropdownColor: cardColor,
-                    style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                     decoration: InputDecoration(
                       filled: true,
                       fillColor: bgSecondary,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
                     ),
                     items: defaultSlotsForStadium(_court).map((s) {
                       final label = '${s['start']} - ${s['end']}';
@@ -3722,25 +3888,25 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   ),
                   const SizedBox(height: spaceMd),
                   // Reason
-                  Text(tr('סיבה / שם לקוח', 'Reason / Customer'), style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(tr('סיבה / שם לקוח', 'Reason / Customer'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: reasonCtrl,
-                    style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                     decoration: InputDecoration(
                       hintText: tr('לדוגמה: קבוצת בית ספר', 'e.g. School team'),
-                      hintStyle: const TextStyle(color: textTertiary, fontSize: 13),
+                      hintStyle: TextStyle(color: textTertiary, fontSize: 13),
                       filled: true,
                       fillColor: bgSecondary,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
                     ),
                   ),
                   const SizedBox(height: spaceMd),
                   // Weeks
-                  Text(tr('כמה שבועות', 'How many weeks'), style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                  Text(tr('כמה שבועות', 'How many weeks'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
@@ -3771,11 +3937,11 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                       child: OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
                         style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: borderColor),
+                          side: BorderSide(color: borderColor),
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                         ),
-                        child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700)),
+                        child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700)),
                       ),
                     ),
                     const SizedBox(width: spaceSm),
@@ -3822,7 +3988,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                           }
                         },
                         icon: saving
-                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: bgColor))
+                            ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: bgColor))
                             : const Icon(Icons.save_outlined, size: 18),
                         label: Text(
                           saving ? tr('שומר...', 'Saving...') : tr('שמור', 'Save'),
@@ -3852,10 +4018,10 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: cardColor,
-        title: Text(tr('ביטול הזמנה קבועה?', 'Cancel Recurring Block?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-        content: Text(tr('זה יסיר את ה"$label" מכל השבועות הבאים.', 'This removes "$label" from all upcoming weeks.'), style: const TextStyle(color: textSecondary)),
+        title: Text(tr('ביטול הזמנה קבועה?', 'Cancel Recurring Block?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+        content: Text(tr('זה יסיר את ה"$label" מכל השבועות הבאים.', 'This removes "$label" from all upcoming weeks.'), style: TextStyle(color: textSecondary)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('השאר', 'KEEP'), style: const TextStyle(color: textSecondary))),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('השאר', 'KEEP'), style: TextStyle(color: textSecondary))),
           TextButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('בטל', 'CANCEL'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
         ],
       ),
@@ -3889,7 +4055,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
           .limit(200)
           .snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final now = DateTime.now();
         var docs = snap.data!.docs.where((d) {
           final b = d.data();
@@ -3923,9 +4089,9 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
         }
 
         if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(upcoming ? Icons.calendar_today_outlined : Icons.history, color: const Color(0xFF333333), size: 48),
+          Icon(upcoming ? Icons.calendar_today_outlined : Icons.history, color: mutedIcon, size: 48),
           const SizedBox(height: 12),
-          Text(upcoming ? tr('אין הזמנות עתידיות','No upcoming bookings') : tr('אין היסטוריה','No history'), style: const TextStyle(color: textSecondary)),
+          Text(upcoming ? tr('אין הזמנות עתידיות','No upcoming bookings') : tr('אין היסטוריה','No history'), style: TextStyle(color: textSecondary)),
         ]));
 
         final allBookings = docs.map((d) => d.data()).toList();
@@ -3978,13 +4144,13 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
           decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
           child: Icon(icon, color: color, size: 20),
         ),
-        title: Text(title, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+        title: Text(title, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
         subtitle: Text(
           '${docs.length} ${tr('הזמנות', 'bookings')}  ·  ₪$rev  ·  $subtitle',
           style: TextStyle(color: docs.isEmpty ? textSecondary : color.withValues(alpha: 0.8), fontSize: 11),
         ),
         trailing: docs.isEmpty
-          ? const Icon(Icons.download_outlined, color: borderColor, size: 22)
+          ? Icon(Icons.download_outlined, color: borderColor, size: 22)
           : IconButton(
               icon: Icon(Icons.download_outlined, color: color, size: 22),
               tooltip: tr('ייצוא', 'Export'),
@@ -4000,7 +4166,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
     child: Column(mainAxisSize: MainAxisSize.min, children: [
       Text(value, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
-      Text(label, style: const TextStyle(color: textSecondary, fontSize: 9)),
+      Text(label, style: TextStyle(color: textSecondary, fontSize: 9)),
     ]),
   );
 
@@ -4008,7 +4174,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     return StreamBuilder(
       stream: _bookingsStream,
       builder: (context, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final docs = snap.data!.docs;
         final now = DateTime.now();
 
@@ -4039,16 +4205,16 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               context: context, initialDate: val,
               firstDate: DateTime(2024),
               lastDate: isFrom ? DateTime.now() : DateTime.now().add(const Duration(days: 1)),
-              builder: (_, child) => Theme(data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor)), child: child!));
+              builder: (_, child) => Theme(data: appThemeData(), child: child!));
             if (picked != null) setState(() { if (isFrom) _reportFrom = picked; else _reportTo = picked; });
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(color: bgColor, borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.35))),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.calendar_today_outlined, color: accentGreen, size: 13),
+              Icon(Icons.calendar_today_outlined, color: accentGreen, size: 13),
               const SizedBox(width: 5),
-              Text('${val.day}/${val.month}/${val.year}', style: const TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.bold)),
+              Text('${val.day}/${val.month}/${val.year}', style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.bold)),
             ]),
           ),
         );
@@ -4081,25 +4247,25 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(color: cardColor, border: Border.all(color: borderColor)),
             child: IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Container(width: 3, color: Colors.orange),
+              Container(width: 3, color: colorWarning),
               Expanded(child: Padding(
                 padding: const EdgeInsets.all(14),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                Container(width: 36, height: 36, decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.tune, color: Colors.orange, size: 18)),
+                Container(width: 36, height: 36, decoration: BoxDecoration(color: colorWarning.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+                  child: Icon(Icons.tune, color: colorWarning, size: 18)),
                 const SizedBox(width: 10),
-                Text(tr('טווח מותאם', 'Custom Range'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+                Text(tr('טווח מותאם', 'Custom Range'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
               ]),
               const SizedBox(height: 10),
               Row(children: [
                 datePicker(_reportFrom, true),
-                const Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('→', style: TextStyle(color: textSecondary, fontSize: 16))),
+                Padding(padding: EdgeInsets.symmetric(horizontal: 8), child: Text('→', style: TextStyle(color: textSecondary, fontSize: 16))),
                 datePicker(_reportTo, false),
               ]),
               const SizedBox(height: 10),
               Row(children: [
-                _chip('${customDocs.length}', tr('הזמנות', 'bookings'), Colors.orange),
+                _chip('${customDocs.length}', tr('הזמנות', 'bookings'), colorWarning),
                 const SizedBox(width: 6),
                 _chip('$customPlayers', tr('שחקנים', 'players'), Colors.blue),
                 const SizedBox(width: 6),
@@ -4111,7 +4277,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   icon: const Icon(Icons.download_outlined, size: 14),
                   label: Text(tr('ייצוא', 'Export'), style: const TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: customDocs.isEmpty ? borderColor : Colors.orange,
+                    backgroundColor: customDocs.isEmpty ? borderColor : colorWarning,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -4127,7 +4293,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
 
           if (sortedMonths.isEmpty)
             Center(child: Padding(padding: const EdgeInsets.symmetric(vertical: 20),
-              child: Text(tr('אין נתונים', 'No data'), style: const TextStyle(color: textSecondary)))),
+              child: Text(tr('אין נתונים', 'No data'), style: TextStyle(color: textSecondary)))),
 
           ...sortedMonths.map((month) {
             final mDocs    = byMonth[month]!;
@@ -4142,15 +4308,15 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
                 leading: Container(width: 38, height: 38,
                   decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
-                  child: Center(child: Text('$mNum', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13)))),
-                title: Text(mLabel, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+                  child: Center(child: Text('$mNum', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13)))),
+                title: Text(mLabel, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
                 subtitle: Text('${mDocs.length} ${tr('הזמנות', 'bookings')}  ·  $mPlayers ${tr('שחקנים', 'players')}',
-                  style: const TextStyle(color: textSecondary, fontSize: 11)),
+                  style: TextStyle(color: textSecondary, fontSize: 11)),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text('₪$mRev', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text('₪$mRev', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 14)),
                   const SizedBox(width: 4),
                   IconButton(
-                    icon: const Icon(Icons.download_outlined, color: accentGreen, size: 20),
+                    icon: Icon(Icons.download_outlined, color: accentGreen, size: 20),
                     onPressed: () => exportToCSV(context, mDocs.map((d) => d.data()).toList(), '${widget.stadiumId}_${month.replaceAll('/', '-')}'),
                   ),
                 ]),
@@ -4190,15 +4356,15 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
         // Search bar
         Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: TextField(
           onChanged: (v) => setState(() => _search = v),
-          style: const TextStyle(color: textPrimary, fontSize: 13),
+          style: TextStyle(color: textPrimary, fontSize: 13),
           decoration: InputDecoration(
             hintText: tr('חפש לפי שם, תאריך, טלפון...', 'Search by name, date, phone...'),
-            hintStyle: const TextStyle(color: textSecondary, fontSize: 12),
-            prefixIcon: const Icon(Icons.search, color: textSecondary, size: 18),
+            hintStyle: TextStyle(color: textSecondary, fontSize: 12),
+            prefixIcon: Icon(Icons.search, color: textSecondary, size: 18),
             filled: true, fillColor: cardColor, contentPadding: const EdgeInsets.symmetric(vertical: 8),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: accentGreen, width: 1.5)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: accentGreen, width: 1.5)),
           ),
         )),
       ],
@@ -4320,25 +4486,25 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               _secTitle('${tr('לוח זמנים', 'SCHEDULE')} — ${_days[_selDay]['date']}'), const Spacer(),
               PopupMenuButton<int>(
                 tooltip: tr('אורך משבצת', 'Slot length'),
-                icon: const Icon(Icons.schedule, color: textSecondary, size: 18),
+                icon: Icon(Icons.schedule, color: textSecondary, size: 18),
                 color: cardColor,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(radiusLg),
-                  side: const BorderSide(color: borderColor),
+                  side: BorderSide(color: borderColor),
                 ),
                 itemBuilder: (_) => [
                   for (final mins in (sportDefaults[_sport]!['slotOptions'] as List).cast<int>())
-                    PopupMenuItem<int>(value: mins, child: Text(tr('$mins דקות', '$mins min'), style: const TextStyle(color: textPrimary, fontSize: 13))),
+                    PopupMenuItem<int>(value: mins, child: Text(tr('$mins דקות', '$mins min'), style: TextStyle(color: textPrimary, fontSize: 13))),
                 ],
                 onSelected: (mins) => _setDayDuration(mins, bookedLabels.isNotEmpty),
               ),
               if (schedData != null && schedData['slots'] != null)
-                TextButton(onPressed: _resetDay, child: Text(tr('איפוס', 'RESET'), style: const TextStyle(color: Colors.orange, fontSize: 11, fontWeight: FontWeight.w900))),
+                TextButton(onPressed: _resetDay, child: Text(tr('איפוס', 'RESET'), style: TextStyle(color: colorWarning, fontSize: 11, fontWeight: FontWeight.w900))),
             ]),
             const SizedBox(height: 6),
             Row(children: [
               _dot(accentGreen, tr('פנוי','Free')), const SizedBox(width: 12),
-              _dot(Colors.orange, tr('תפוס','Booked')), const SizedBox(width: 12),
+              _dot(colorWarning, tr('תפוס','Booked')), const SizedBox(width: 12),
               _dot(Colors.red, tr('חסום','Blocked')), const SizedBox(width: 12),
               _dot(Colors.purple, tr('קבוע','Fixed')),
             ]),
@@ -4355,7 +4521,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 if (h < now.hour) return const SizedBox.shrink();
               }
               Color bg, border, textClr;
-              if (isBooked)        { bg = Colors.orange.withValues(alpha: 0.1); border = Colors.orange.withValues(alpha: 0.5); textClr = Colors.orange; }
+              if (isBooked)        { bg = colorWarning.withValues(alpha: 0.1); border = colorWarning.withValues(alpha: 0.5); textClr = colorWarning; }
               else if (isFixed)    { bg = Colors.purple.withValues(alpha: 0.1); border = Colors.purple.withValues(alpha: 0.5); textClr = Colors.purple; }
               else if (isBlocked)  { bg = Colors.red.withValues(alpha: 0.08);   border = Colors.red.withValues(alpha: 0.4);    textClr = Colors.red; }
               else                 { bg = cardColor; border = accentGreen.withValues(alpha: 0.3); textClr = textPrimary; }
@@ -4366,8 +4532,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12), border: Border.all(color: border)),
                 child: Row(children: [
-                  SizedBox(width: 120, child: Text(label, style: TextStyle(color: textClr, fontWeight: FontWeight.w900, fontSize: 15))),
-                  if (isBooked)        _badge(tr('תפוס','BOOKED'), Colors.orange)
+                  SizedBox(width: 120, child: Text(label, textDirection: TextDirection.ltr, style: TextStyle(color: textClr, fontWeight: FontWeight.w900, fontSize: 15))),
+                  if (isBooked)        _badge(tr('תפוס','BOOKED'), colorWarning)
                   else if (isFixed)    _badge(fixedReason ?? tr('קבוע', 'FIXED'), Colors.purple)
                   else if (isBlocked)  _badge(tr('חסום','BLOCKED'), Colors.red)
                   else                 _badge(tr('פנוי','FREE'), accentGreen),
@@ -4393,15 +4559,15 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                           return GestureDetector(
                             onTap: () => showBookingDetails(context, bookingData, isAdmin: true, docId: match.first.id),
                             child: Row(children: [
-                              if (phone.isNotEmpty) ...[Text(phone, style: const TextStyle(color: accentGreen, fontSize: 11)), const SizedBox(width: 4)],
-                              Text('$count/${bookingData['maxPlayers'] ?? 18}', style: const TextStyle(color: textSecondary, fontSize: 12)),
+                              if (phone.isNotEmpty) ...[Text(phone, style: TextStyle(color: accentGreen, fontSize: 11)), const SizedBox(width: 4)],
+                              Text('$count/${bookingData['maxPlayers'] ?? 18}', style: TextStyle(color: textSecondary, fontSize: 12)),
                               const SizedBox(width: 4),
-                              const Icon(Icons.info_outline, color: accentGreen, size: 16),
+                              Icon(Icons.info_outline, color: accentGreen, size: 16),
                             ]),
                           );
                         }
-                        return Text(tr('תפוס','booked'), style: const TextStyle(color: textSecondary, fontSize: 12));
-                      } catch (_) { return Text(tr('תפוס','booked'), style: const TextStyle(color: textSecondary, fontSize: 12)); }
+                        return Text(tr('תפוס','booked'), style: TextStyle(color: textSecondary, fontSize: 12));
+                      } catch (_) { return Text(tr('תפוס','booked'), style: TextStyle(color: textSecondary, fontSize: 12)); }
                     }),
                   ],
                 ]),
@@ -4421,7 +4587,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
   );
   }
 
-  Widget _dot(Color c, String l) => Row(children: [Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)), const SizedBox(width: 3), Text(l, style: const TextStyle(color: textSecondary, fontSize: 10))]);
+  Widget _dot(Color c, String l) => Row(children: [Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)), const SizedBox(width: 3), Text(l, style: TextStyle(color: textSecondary, fontSize: 10))]);
   Widget _badge(String t, Color c) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withValues(alpha: 0.4))), child: Text(t, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.w900)));
 }
 
@@ -4448,9 +4614,9 @@ class SingleAdminScreen extends StatelessWidget {
         backgroundColor: bgColor,
         appBar: AdminAppBar(
           title: Row(children: [
-            const Icon(Icons.shield_outlined, color: Colors.amber, size: 20),
+            Icon(Icons.shield_outlined, color: accentAmber, size: 20),
             const SizedBox(width: 8),
-            Text('${s['name']} ${tr('אדמין', 'ADMIN')}', style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+            Text('${s['name']} ${tr('אדמין', 'ADMIN')}', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
           ]),
           bottom: TabBar(
             indicatorColor: accentGreen,
@@ -4490,12 +4656,12 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
   @override
   Widget build(BuildContext context) {
     final title = Row(children: [
-      const Icon(Icons.shield_outlined, color: Colors.amber, size: 20),
+      Icon(Icons.shield_outlined, color: accentAmber, size: 20),
       const SizedBox(width: 8),
       Semantics(
         identifier: 'court_admin_screen',
         container: true,
-        child: Text(tr('ניהול מגרשים', 'COURT ADMIN'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+        child: Text(tr('ניהול מגרשים', 'COURT ADMIN'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
       ),
     ]);
     if (!_loaded) {
@@ -4595,10 +4761,10 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
   Future<bool> _confirm(String title, String body, String action) async {
     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(title, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-      content: Text(body, style: const TextStyle(color: textSecondary)),
+      title: Text(title, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      content: Text(body, style: TextStyle(color: textSecondary)),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         Semantics(
           identifier: 'courts_confirm_button',
           container: true,
@@ -4614,7 +4780,7 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
     final formKey = GlobalKey<FormState>();
     final email = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text('${tr('אדמין ל', 'Admin for ')}${court['name']}', style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      title: Text('${tr('אדמין ל', 'Admin for ')}${court['name']}', style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
       content: Form(key: formKey, child: appTextField(
         controller: ctrl,
         label: tr('מייל האדמין', 'Admin email'),
@@ -4623,13 +4789,13 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
         validator: _validateAdminEmail,
       )),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         Semantics(
           identifier: 'court_admin_save_button',
           container: true,
           child: TextButton(
             onPressed: () { if (formKey.currentState!.validate()) Navigator.pop(ctx, ctrl.text.trim().toLowerCase()); },
-            child: Text(tr('שמור', 'Save'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+            child: Text(tr('שמור', 'Save'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
           ),
         ),
       ],
@@ -4705,7 +4871,7 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
   void _openSchedule(Map<String, dynamic> court) {
     navigateTo(context, Scaffold(
       backgroundColor: bgColor,
-      appBar: AdminAppBar(title: Text(court['name'] as String, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900))),
+      appBar: AdminAppBar(title: Text(court['name'] as String, style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900))),
       body: AdminStadiumTab(
         stadiumName: court['name'] as String,
         stadiumId: court['id'] as String,
@@ -4734,21 +4900,21 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
           Row(children: [
             Icon(sportIcon(sport), color: accentGreen, size: 20),
             const SizedBox(width: 8),
-            Expanded(child: Text(court['name'] as String, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 15))),
+            Expanded(child: Text(court['name'] as String, style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 15))),
           ]),
           const SizedBox(height: 4),
-          Text(details, style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(details, style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: spaceSm),
-          Text(tr('אדמינים', 'Admins'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w700)),
+          Text(tr('אדמינים', 'Admins'), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
             if (admins.isEmpty)
-              Text(tr('אין אדמין', 'No admin'), style: const TextStyle(color: colorWarning, fontSize: 12, fontWeight: FontWeight.w700)),
+              Text(tr('אין אדמין', 'No admin'), style: TextStyle(color: colorWarning, fontSize: 12, fontWeight: FontWeight.w700)),
             for (final email in admins)
               InputChip(
-                label: Text(email, style: const TextStyle(color: textPrimary, fontSize: 12)),
+                label: Text(email, style: TextStyle(color: textPrimary, fontSize: 12)),
                 backgroundColor: bgSecondary,
-                side: const BorderSide(color: borderColor),
+                side: BorderSide(color: borderColor),
                 deleteIconColor: textSecondary,
                 onDeleted: () => _removeAdmin(email, court),
               ),
@@ -4758,8 +4924,8 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
               button: true,
               child: TextButton.icon(
                 onPressed: () => _addAdmin(court),
-                icon: const Icon(Icons.person_add_alt_1, size: 16, color: accentGreen),
-                label: Text(tr('הוסף אדמין', 'Add admin'), style: const TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w700)),
+                icon: Icon(Icons.person_add_alt_1, size: 16, color: accentGreen),
+                label: Text(tr('הוסף אדמין', 'Add admin'), style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w700)),
               ),
             ),
           ]),
@@ -4771,8 +4937,8 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
               button: true,
               child: TextButton.icon(
                 onPressed: () => _openSchedule(court),
-                icon: const Icon(Icons.calendar_month_outlined, size: 16, color: textSecondary),
-                label: Text(tr('לוח זמנים', 'Schedule'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+                icon: Icon(Icons.calendar_month_outlined, size: 16, color: textSecondary),
+                label: Text(tr('לוח זמנים', 'Schedule'), style: TextStyle(color: textSecondary, fontSize: 12)),
               ),
             )),
             Expanded(child: Semantics(
@@ -4840,12 +5006,12 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
                   padding: const EdgeInsets.symmetric(horizontal: spaceMd, vertical: spaceXs),
                   decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: borderColor)),
                   child: Row(children: [
-                    Expanded(child: Text('${c['name']}${c['venueName'] != null ? ' • ${c['venueName']}' : ''}', style: const TextStyle(color: textSecondary, fontSize: 13))),
+                    Expanded(child: Text('${c['name']}${c['venueName'] != null ? ' • ${c['venueName']}' : ''}', style: TextStyle(color: textSecondary, fontSize: 13))),
                     Semantics(
                       identifier: 'court_restore_${c['id']}',
                       container: true,
                       button: true,
-                      child: TextButton(onPressed: () => _restoreCourt(c), child: Text(tr('החזר', 'Restore'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w700))),
+                      child: TextButton(onPressed: () => _restoreCourt(c), child: Text(tr('החזר', 'Restore'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w700))),
                     ),
                   ]),
                 ),
@@ -4918,8 +5084,8 @@ class _AddCourtScreenState extends State<AddCourtScreen> {
         items: items,
         isExpanded: true,
         dropdownColor: cardColor,
-        style: const TextStyle(color: textPrimary, fontSize: 14),
-        decoration: InputDecoration(labelText: label, labelStyle: const TextStyle(color: textSecondary)),
+        style: TextStyle(color: textPrimary, fontSize: 14),
+        decoration: InputDecoration(labelText: label, labelStyle: TextStyle(color: textSecondary)),
         onChanged: (v) { if (v != null) onChanged(v); },
       ),
     );
@@ -5016,7 +5182,7 @@ class _AddCourtScreenState extends State<AddCourtScreen> {
       appBar: AdminAppBar(title: Semantics(
         identifier: 'add_court_screen',
         container: true,
-        child: Text(tr('הוספת מגרש', 'ADD COURT'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+        child: Text(tr('הוספת מגרש', 'ADD COURT'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
       )),
       body: Center(child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
@@ -5078,7 +5244,7 @@ class _AddCourtScreenState extends State<AddCourtScreen> {
           const SizedBox(height: 6),
           Text(
             tr('האדמין צריך להירשם באפליקציה עם אותו מייל ולאמת אותו.', 'The admin must register in the app with this email and verify it.'),
-            style: const TextStyle(color: textSecondary, fontSize: 12),
+            style: TextStyle(color: textSecondary, fontSize: 12),
           ),
           if (_error.isNotEmpty) ...[
             const SizedBox(height: spaceSm),
@@ -5105,7 +5271,7 @@ class VenueSelectionScreen extends StatefulWidget {
   State<VenueSelectionScreen> createState() => _VenueSelectionScreenState();
 }
 
-class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
+class _VenueSelectionScreenState extends State<VenueSelectionScreen> with WidgetsBindingObserver {
   /// Selected sport filter (null = all). Chips only render when the visible
   /// venues span more than one sport, so football-only sites look unchanged.
   String? _sportFilter;
@@ -5118,6 +5284,62 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
     super.initState();
     // Courts the owner added or removed show up without a new release.
     loadCatalog().then((_) { if (mounted) setState(() {}); });
+    WidgetsBinding.instance.addObserver(this);
+    _checkVerified();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // The verification link usually opens elsewhere (mail app, another tab), so
+  // check again whenever the user comes back to the app.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkVerified();
+  }
+
+  Future<void> _checkVerified({bool fromButton = false}) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.emailVerified) return;
+    bool verified;
+    try {
+      verified = await _refreshVerified(user);
+    } catch (_) {
+      if (fromButton && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('לא הצלחנו לבדוק, נסה שוב', "Couldn't check, please try again")),
+          backgroundColor: colorError,
+        ));
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (!verified) {
+      if (fromButton) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(tr('עדיין לא אומת. פתח את הקישור שקיבלת במייל', 'Not verified yet. Open the link in the email')),
+          backgroundColor: colorWarning,
+        ));
+      }
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('האימייל אומת ✓', 'Email verified ✓')),
+      backgroundColor: accentGreen,
+      duration: const Duration(seconds: 2),
+    ));
+    // The owner and court admins get their screens as soon as they verify.
+    final fresh = FirebaseAuth.instance.currentUser;
+    final Widget home = fresh == null ? widget : await homeScreenForUser(fresh);
+    if (!mounted) return;
+    if (home is VenueSelectionScreen) {
+      setState(() {});
+    } else {
+      Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => home), (route) => false);
+    }
   }
 
   @override
@@ -5137,6 +5359,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
     }).toList();
     final width = MediaQuery.of(context).size.width;
     final isMobile = width < 700;
+    final isNarrow = width < 360;
     final isTablet = width >= 700 && width < 1100;
     final crossAxisCount = isMobile ? 1 : (isTablet ? 2 : 3);
 
@@ -5162,7 +5385,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                 horizontal: isMobile ? spaceMd : spaceXl,
                 vertical: spaceMd,
               ),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: bgColor,
                 border: Border(bottom: BorderSide(color: borderColor)),
               ),
@@ -5184,7 +5407,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                 ),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Icon(Icons.stadium_rounded, color: bgColor, size: 22),
+                              child: Icon(Icons.stadium_rounded, color: bgColor, size: 22),
                             ),
                             const SizedBox(width: spaceSm),
                             Expanded(
@@ -5202,13 +5425,13 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                   Semantics(
                                     identifier: 'home_screen',
                                     container: true,
-                                    child: const Text(
+                                    child: Text(
                                       'STADIUM',
                                       style: TextStyle(
                                         color: textPrimary,
-                                        fontSize: 22,
+                                        fontSize: isNarrow ? 14 : 22,
                                         fontWeight: FontWeight.w900,
-                                        letterSpacing: 2,
+                                        letterSpacing: isNarrow ? 1 : 2,
                                       ),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -5217,7 +5440,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                   if (!isMobile)
                                     Text(
                                       tr('בחר את המתחם שלך', 'Choose your venue'),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         color: textSecondary,
                                         fontSize: 12,
                                         fontWeight: FontWeight.w500,
@@ -5231,7 +5454,36 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(width: spaceMd),
+                      const SizedBox(width: spaceSm),
+                      Semantics(
+                        identifier: 'home_join_code',
+                        button: true,
+                        container: true,
+                        child: InkWell(
+                          onTap: () => navigateTo(context, const JoinByCodeScreen()),
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            height: 40,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              color: accentGreen.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: accentGreen.withValues(alpha: 0.35)),
+                            ),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(Icons.qr_code_2_rounded, color: accentGreen, size: 18),
+                              if (!isNarrow) ...[
+                                const SizedBox(width: 6),
+                                Text(
+                                  isMobile ? tr('קוד', 'Code') : tr('הצטרפות עם קוד', 'Join with a code'),
+                                  style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w800),
+                                ),
+                              ],
+                            ]),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: spaceSm),
                       StreamBuilder<QuerySnapshot>(
                         stream: FirebaseAuth.instance.currentUser != null
                             ? FirebaseFirestore.instance
@@ -5275,7 +5527,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                         // Hero Section
                         Container(
                           width: double.infinity,
-                          padding: EdgeInsets.all(isMobile ? spaceMd : spaceLg),
+                          padding: EdgeInsets.symmetric(horizontal: isMobile ? spaceMd : spaceLg, vertical: isMobile ? spaceSm : spaceLg),
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -5289,6 +5541,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                             border: Border.all(color: accentGreen.withValues(alpha: 0.2)),
                           ),
                           child: Row(children: [
+                            if (!isMobile) ...[
                             Container(
                               width: isMobile ? 44 : 56,
                               height: isMobile ? 44 : 56,
@@ -5299,6 +5552,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                               child: Icon(Icons.waving_hand_rounded, color: accentGreen, size: isMobile ? 22 : 28),
                             ),
                             SizedBox(width: isMobile ? spaceSm : spaceMd),
+                            ],
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -5347,7 +5601,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                     color: colorWarning.withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(10),
                                   ),
-                                  child: const Icon(Icons.mark_email_unread_rounded, color: colorWarning, size: 20),
+                                  child: Icon(Icons.mark_email_unread_rounded, color: colorWarning, size: 20),
                                 ),
                                 const SizedBox(width: spaceSm),
                                 Expanded(
@@ -5356,16 +5610,34 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                     children: [
                                       Text(
                                         tr('אימייל לא אומת', 'Email not verified'),
-                                        style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
+                                        style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
                                         tr('בדוק את תיבת הדואר ואת הספאם 📬', 'Check inbox and SPAM folder 📬'),
-                                        style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w500),
+                                        style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w500),
                                       ),
                                     ],
                                   ),
                                 ),
+                                Semantics(
+                                  identifier: 'verify_check',
+                                  button: true,
+                                  container: true,
+                                  child: TextButton(
+                                    onPressed: () => _checkVerified(fromButton: true),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                      backgroundColor: accentGreen.withValues(alpha: 0.15),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusSm)),
+                                    ),
+                                    child: Text(
+                                      tr('אימתתי', "I've verified"),
+                                      style: TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.w800),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
                                 TextButton(
                                   onPressed: () async {
                                     try {
@@ -5387,7 +5659,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                                   ),
                                   child: Text(
                                     tr('שלח שוב', 'Resend'),
-                                    style: const TextStyle(color: colorWarning, fontSize: 11, fontWeight: FontWeight.w800),
+                                    style: TextStyle(color: colorWarning, fontSize: 11, fontWeight: FontWeight.w800),
                                   ),
                                 ),
                               ]),
@@ -5422,7 +5694,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                               child: Text(
                                 tr('אין מתחמים שמתאימים לסינון', 'No venues match these filters'),
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
+                                style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
                               ),
                             ),
                           ),
@@ -5437,6 +5709,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                             mainAxisSpacing: spaceMd,
                             crossAxisSpacing: spaceMd,
                             childAspectRatio: isMobile ? 1.05 : 0.95,
+                            mainAxisExtent: isMobile ? 300 : null,
                           ),
                           itemCount: shownVenues.length,
                           itemBuilder: (ctx, i) {
@@ -5463,7 +5736,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
             // ============== FOOTER ==============
             Container(
               padding: const EdgeInsets.all(spaceMd),
-              child: const Text(
+              child: Text(
                 'STADIUM v1.0  •  © 2026',
                 style: TextStyle(color: textTertiary, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5),
                 textAlign: TextAlign.center,
@@ -5501,7 +5774,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                   ),
                   child: Text(
                     badge,
-                    style: const TextStyle(color: bgColor, fontSize: 7, fontWeight: FontWeight.w900),
+                    style: TextStyle(color: bgColor, fontSize: 7, fontWeight: FontWeight.w900),
                   ),
                 ),
               ),
@@ -5521,12 +5794,12 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
       ),
       child: PopupMenuButton<String>(
         tooltip: tr('תפריט', 'Menu'),
-        icon: const Icon(Icons.menu, color: textPrimary, size: 18),
+        icon: Icon(Icons.menu, color: textPrimary, size: 18),
         padding: EdgeInsets.zero,
         color: cardColor,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusLg),
-          side: const BorderSide(color: borderColor),
+          side: BorderSide(color: borderColor),
         ),
         offset: const Offset(0, 48),
         itemBuilder: (ctx) => [
@@ -5539,6 +5812,10 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
             child: _menuRow(Icons.calendar_month_outlined, tr('ההזמנות שלי', 'My Bookings'), accentGreen),
           ),
           const PopupMenuDivider(),
+          PopupMenuItem<String>(
+            value: 'theme',
+            child: _menuRow(isLightMode ? Icons.dark_mode_outlined : Icons.light_mode_outlined, isLightMode ? tr('מצב כהה', 'Dark mode') : tr('מצב בהיר', 'Light mode'), textPrimary),
+          ),
           PopupMenuItem<String>(
             value: 'language',
             child: _menuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
@@ -5557,6 +5834,9 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
             case 'bookings':
               navigateTo(context, const MyBookingsScreen(),);
               break;
+            case 'theme':
+              toggleAppTheme();
+              break;
             case 'language':
               toggleAppLanguage(context);
               break;
@@ -5567,16 +5847,16 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
                   backgroundColor: cardColor,
                   title: Text(
                     tr('יציאה?', 'Sign Out?'),
-                    style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
                   ),
                   content: Text(
                     tr('האם אתה בטוח שברצונך לצאת?', 'Are you sure you want to sign out?'),
-                    style: const TextStyle(color: textSecondary),
+                    style: TextStyle(color: textSecondary),
                   ),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(context, false),
-                      child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)),
+                      child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)),
                     ),
                     ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
@@ -5601,7 +5881,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> {
         const SizedBox(width: spaceSm),
         Text(
           label,
-          style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+          style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ],
     );
@@ -5800,7 +6080,7 @@ class _VenueCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
-                isHebrew ? Icons.arrow_back : Icons.arrow_forward,
+                Icons.arrow_forward,
                 color: bgColor,
                 size: 18,
               ),
@@ -5858,7 +6138,6 @@ class _VenueCard extends StatelessWidget {
                       _featureBadge(Icons.calendar_month, tr('הזמנות', 'Booking'), accentGreen),
                       if (hasTraining)
                         _featureBadge(Icons.school_outlined, tr('אימונים', 'Training'), const Color(0xFF3B82F6)),
-                      _featureBadge(Icons.qr_code_2, tr('קוד', 'Code'), const Color(0xFFF59E0B)),
                     ],
                   ),
                 ],
@@ -5929,7 +6208,7 @@ class _VenueCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: textPrimary,
                       fontSize: 20,
                       fontWeight: FontWeight.w900,
@@ -5945,7 +6224,7 @@ class _VenueCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
-                    isHebrew ? Icons.arrow_back : Icons.arrow_forward,
+                    Icons.arrow_forward,
                     color: bgColor,
                     size: 18,
                   ),
@@ -5955,7 +6234,7 @@ class _VenueCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   description,
-                  style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
+                  style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -5976,7 +6255,6 @@ class _VenueCard extends StatelessWidget {
                   _featureBadge(Icons.calendar_month, tr('הזמנות', 'Booking'), accentGreen),
                   if (hasTraining)
                     _featureBadge(Icons.school_outlined, tr('אימונים', 'Training'), const Color(0xFF3B82F6)),
-                  _featureBadge(Icons.qr_code_2, tr('קוד', 'Code'), const Color(0xFFF59E0B)),
                 ],
               ),
             ],
@@ -6028,7 +6306,7 @@ class _VenueCard extends StatelessWidget {
           ? child
           : Container(
               color: cardColor,
-              child: const Center(
+              child: Center(
                 child: CircularProgressIndicator(color: accentGreen, strokeWidth: 2),
               ),
             ),
@@ -6057,7 +6335,7 @@ class _VenueCard extends StatelessWidget {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Icon(icon, color: textSecondary, size: 14),
       const SizedBox(width: 4),
-      Text(label, style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+      Text(label, style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
     ]);
   }
 
@@ -6134,15 +6412,6 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
             navigateTo(context, TrainingGroupsListScreen(venueId: venue['id'] as String, venueName: name),);
           },
         },
-      {
-        'icon': Icons.qr_code_2_rounded,
-        'title': tr('קוד גישה', 'Access Code'),
-        'subtitle': tr('הזן קוד הזמנה', 'Enter booking code'),
-        'color': const Color(0xFFF59E0B),
-        'onTap': () {
-          navigateTo(context, const JoinByCodeScreen(),);
-        },
-      },
     ];
 
     return Scaffold(
@@ -6215,7 +6484,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                                           color: accentGreen,
                                           fontSize: isMobile ? 12 : 13,
                                           fontWeight: FontWeight.w700,
-                                          letterSpacing: 1,
+                                          letterSpacing: isHebrew ? 0 : 1,
                                         ),
                                       ),
                                       const SizedBox(height: 2),
@@ -6230,11 +6499,11 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       Row(children: [
-                                        const Icon(Icons.location_on, color: textSecondary, size: 13),
+                                        Icon(Icons.location_on, color: textSecondary, size: 13),
                                         const SizedBox(width: 4),
                                         Text(
                                           region,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             color: textSecondary,
                                             fontSize: 12,
                                             fontWeight: FontWeight.w600,
@@ -6245,7 +6514,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                                         const SizedBox(width: 4),
                                         Text(
                                           '${stadiums.length} ${courtWord(sport, "מגרשים", "fields", plural: true)}',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             color: textSecondary,
                                             fontSize: 12,
                                             fontWeight: FontWeight.w600,
@@ -6297,10 +6566,10 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                         appListTile(
                           icon: Icons.person_rounded,
                           title: tr('הפרטים שלי', 'My Details'),
-                          subtitle: tr('שם, אימייל, טלפון, תאריך לידה', 'Name, email, phone, date of birth'),
-                          iconColor: const Color(0xFFF59E0B),
+                          subtitle: tr('שם, אימייל, טלפון, עיר', 'Name, email, phone, city'),
+                          iconColor: accentOrange,
                           trailing: Icon(
-                            isHebrew ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
+                            Icons.arrow_forward_ios,
                             color: textSecondary, size: 14,
                           ),
                           onTap: () {
@@ -6314,7 +6583,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                           subtitle: tr('הזמנות עתידיות, היסטוריה וביטול', 'Upcoming, history & cancel'),
                           iconColor: accentGreen,
                           trailing: Icon(
-                            isHebrew ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
+                            Icons.arrow_forward_ios,
                             color: textSecondary, size: 14,
                           ),
                           onTap: () {
@@ -6331,7 +6600,7 @@ class _VenueHomeScreenState extends State<VenueHomeScreen> {
                             subtitle: tr('סטטוס תשלום, פרטי הקבוצה', 'Payment status, group details'),
                             iconColor: const Color(0xFF3B82F6),
                             trailing: Icon(
-                              isHebrew ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
+                              Icons.arrow_forward_ios,
                               color: textSecondary, size: 14,
                             ),
                             onTap: () {
@@ -6401,7 +6670,7 @@ class _ActionCard extends StatelessWidget {
                       children: [
                         Text(
                           title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: textPrimary,
                             fontSize: 15,
                             fontWeight: FontWeight.w800,
@@ -6410,7 +6679,7 @@ class _ActionCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           subtitle,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: textSecondary,
                             fontSize: 11.5,
                             fontWeight: FontWeight.w500,
@@ -6420,7 +6689,7 @@ class _ActionCard extends StatelessWidget {
                     ),
                   ),
                   Icon(
-                    isHebrew ? Icons.arrow_back_ios : Icons.arrow_forward_ios,
+                    Icons.arrow_forward_ios,
                     color: textSecondary, size: 14,
                   ),
                 ],
@@ -6439,7 +6708,7 @@ class _ActionCard extends StatelessWidget {
                   const Spacer(),
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: textPrimary,
                       fontSize: 18,
                       fontWeight: FontWeight.w900,
@@ -6448,7 +6717,7 @@ class _ActionCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     subtitle,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
@@ -6462,12 +6731,12 @@ class _ActionCard extends StatelessWidget {
                         color: color,
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
-                        letterSpacing: 1,
+                        letterSpacing: isHebrew ? 0 : 1,
                       ),
                     ),
                     const SizedBox(width: 4),
                     Icon(
-                      isHebrew ? Icons.arrow_back : Icons.arrow_forward,
+                      Icons.arrow_forward,
                       color: color, size: 14,
                     ),
                   ]),
@@ -6520,6 +6789,7 @@ class StadiumSelectionScreen extends StatelessWidget {
                         mainAxisSpacing: spaceMd,
                         crossAxisSpacing: spaceMd,
                         childAspectRatio: isMobile ? 2.2 : 1.4,
+                        mainAxisExtent: isMobile ? 190 : null,
                       ),
                       itemCount: stadiums.length,
                       itemBuilder: (ctx, i) {
@@ -6554,17 +6824,17 @@ class StadiumSelectionScreen extends StatelessWidget {
                                 const SizedBox(height: spaceMd),
                                 Text(
                                   s['name'] as String,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: textPrimary,
                                     fontSize: 20,
                                     fontWeight: FontWeight.w900,
-                                    letterSpacing: 0.5,
+                                    letterSpacing: isHebrew ? 0 : 0.5,
                                   ),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   '₪${s['price']} ${isHebrew ? "להזמנה" : "per booking"}',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     color: textSecondary,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
@@ -6574,16 +6844,16 @@ class StadiumSelectionScreen extends StatelessWidget {
                                 Row(children: [
                                   Text(
                                     tr('בחר', 'Select'),
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: accentGreen,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w800,
-                                      letterSpacing: 1,
+                                      letterSpacing: isHebrew ? 0 : 1,
                                     ),
                                   ),
                                   const SizedBox(width: 4),
                                   Icon(
-                                    isHebrew ? Icons.arrow_back : Icons.arrow_forward,
+                                    Icons.arrow_forward,
                                     color: accentGreen, size: 14,
                                   ),
                                 ]),
@@ -6623,7 +6893,7 @@ class StadiumCard extends StatelessWidget {
               height: 130,
               decoration: BoxDecoration(
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [accentGreen.withValues(alpha: 0.25), const Color(0xFF0D0D0D)]),
+                gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [accentGreen.withValues(alpha: 0.25), gradientEnd]),
               ),
               child: Center(child: Icon(stadium['type'] == 'Tennis' ? Icons.sports_tennis : Icons.sports_soccer, color: accentGreen.withValues(alpha: 0.6), size: 64)),
             );
@@ -6636,7 +6906,7 @@ class StadiumCard extends StatelessWidget {
                     // in memory when the source URL points at a 4K photo.
                     cacheHeight: 260, cacheWidth: 1080,
                     loadingBuilder: (_, child, progress) => progress == null ? child
-                      : SizedBox(height: 130, child: Container(decoration: const BoxDecoration(borderRadius: BorderRadius.vertical(top: Radius.circular(16)), color: cardColor), child: const Center(child: CircularProgressIndicator(color: accentGreen, strokeWidth: 2)))),
+                      : SizedBox(height: 130, child: Container(decoration: BoxDecoration(borderRadius: BorderRadius.vertical(top: Radius.circular(16)), color: cardColor), child: Center(child: CircularProgressIndicator(color: accentGreen, strokeWidth: 2)))),
                     errorBuilder: (_, __, ___) => defaultBg,
                   ),
                 )
@@ -6652,17 +6922,17 @@ class StadiumCard extends StatelessWidget {
                       color: Colors.black.withValues(alpha: 0.3),
                     ),
                   )),
-                Positioned(top: 12, left: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: bgColor.withValues(alpha: 0.8), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.5))), child: Text(stadium['type'], style: const TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.bold)))),
-                Positioned(top: 12, right: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(8)), child: Text(stadium['pricePerHour'] != null ? '₪${stadium['pricePerHour']}/${tr('שעה', 'hr')}' : '₪${stadium['price']}/2hr', style: const TextStyle(color: bgColor, fontSize: 11, fontWeight: FontWeight.w900)))),
+                Positioned(top: 12, left: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: bgColor.withValues(alpha: 0.8), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.5))), child: Text(stadium['type'], style: TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.bold)))),
+                Positioned(top: 12, right: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5), decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(8)), child: Text(stadium['pricePerHour'] != null ? '₪${stadium['pricePerHour']}/${tr('שעה', 'hr')}' : '₪${stadium['price']}/2hr', style: TextStyle(color: bgColor, fontSize: 11, fontWeight: FontWeight.w900)))),
               ]),
             );
           },
         ),
         Padding(padding: const EdgeInsets.all(14), child: Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(stadium['name'], style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 17, letterSpacing: 1)),
+            Text(stadium['name'], style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 17, letterSpacing: 1)),
             const SizedBox(height: 4),
-            Row(children: [const Icon(Icons.location_on_outlined, color: textSecondary, size: 14), const SizedBox(width: 2), Text(stadium['location'], style: const TextStyle(color: textSecondary, fontSize: 13))]),
+            Row(children: [Icon(Icons.location_on_outlined, color: textSecondary, size: 14), const SizedBox(width: 2), Text(stadium['location'], style: TextStyle(color: textSecondary, fontSize: 13))]),
           ])),
           ElevatedButton(onPressed: () => navigateTo(context, BookingScreen(stadium: stadium)),
             style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
@@ -6811,19 +7081,19 @@ class _BookingScreenState extends State<BookingScreen> {
                       color: accentGreen.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: const Icon(Icons.event_available_rounded, color: accentGreen, size: 32),
+                    child: Icon(Icons.event_available_rounded, color: accentGreen, size: 32),
                   ),
                 ),
                 const SizedBox(height: spaceMd),
                 Text(
                   tr('אישור הזמנה', 'Confirm Booking'),
-                  style: const TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
+                  style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   tr('בדוק את הפרטים לפני האישור', 'Review details before confirming'),
-                  style: const TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
+                  style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: spaceLg),
@@ -6896,16 +7166,16 @@ class _BookingScreenState extends State<BookingScreen> {
                     Container(height: 1, color: borderColor),
                     const SizedBox(height: 10),
                     Row(children: [
-                      const Icon(Icons.payments_outlined, color: accentGreen, size: 16),
+                      Icon(Icons.payments_outlined, color: accentGreen, size: 16),
                       const SizedBox(width: 8),
                       Text(
                         tr('מחיר:', 'Price:'),
-                        style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600),
+                        style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600),
                       ),
                       const Spacer(),
                       Text(
                         '₪${_selectedType?['price'] ?? widget.stadium['price']}',
-                        style: const TextStyle(color: accentGreen, fontSize: 18, fontWeight: FontWeight.w900),
+                        style: TextStyle(color: accentGreen, fontSize: 18, fontWeight: FontWeight.w900),
                       ),
                     ]),
                   ]),
@@ -6916,13 +7186,13 @@ class _BookingScreenState extends State<BookingScreen> {
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(ctx, false),
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: borderColor),
+                        side: BorderSide(color: borderColor),
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                       ),
                       child: Text(
                         tr('ביטול', 'Cancel'),
-                        style: const TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700),
+                        style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
@@ -7103,30 +7373,14 @@ class _BookingScreenState extends State<BookingScreen> {
     setState(() { _booking = false; _selSlot = null; });
     if (!mounted) return;
     showDialog(context: context, builder: (dialogContext) => AlertDialog(
+      scrollable: true,
       backgroundColor: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: Text(tr('ההזמנה אושרה! 🎉','Booking Confirmed! 🎉'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      title: Text(tr('ההזמנה אושרה! 🎉','Booking Confirmed! 🎉'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
-          child: Column(children: [Text(widget.stadium['name'], style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)), Text('${_days[_selDay]['name']} $date • $label', style: const TextStyle(color: textSecondary, fontSize: 13))])),
+          child: Column(children: [Text(widget.stadium['name'], style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)), Text('${_days[_selDay]['name']} $date • $label', style: TextStyle(color: textSecondary, fontSize: 13))])),
         const SizedBox(height: 20),
-        Text(tr('שלח קוד לחברים','SHARE CODE WITH FRIENDS'), style: const TextStyle(color: textSecondary, fontSize: 11, letterSpacing: 2)),
-        const SizedBox(height: 8),
-        GestureDetector(
-          onTap: () async {
-            await Clipboard.setData(ClipboardData(text: code));
-            if (dialogContext.mounted) ScaffoldMessenger.of(dialogContext).showSnackBar(SnackBar(content: Text(tr('הקוד הועתק! 📋', 'Code copied! 📋')), backgroundColor: accentGreen, duration: const Duration(seconds: 2)));
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Text(code, style: const TextStyle(color: accentGreen, fontSize: 48, fontWeight: FontWeight.w900, letterSpacing: 12)),
-              const SizedBox(width: 12), const Icon(Icons.copy_outlined, color: accentGreen, size: 22),
-            ]),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(tr('לחץ על הקוד להעתקה', 'Tap code to copy'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+        BookingSharePanel(bookingId: slotKey, code: code, summary: '${widget.stadium['name']} • ${_days[_selDay]['name']} $date • $label'),
       ]),
       actions: [ElevatedButton(onPressed: () => Navigator.pop(dialogContext), style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: Text(tr('הבנתי','GOT IT'), style: const TextStyle(fontWeight: FontWeight.w900)))],
     ));
@@ -7134,8 +7388,8 @@ class _BookingScreenState extends State<BookingScreen> {
 
   void _dlg(String t, String msg, {bool err = false}) => showDialog(context: context, builder: (_) => AlertDialog(
     backgroundColor: cardColor, title: Text(t, style: TextStyle(color: err?Colors.red:accentGreen, fontWeight: FontWeight.bold)),
-    content: Text(msg, style: const TextStyle(color: textSecondary)),
-    actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('אישור','OK'), style: const TextStyle(color: accentGreen)))],
+    content: Text(msg, style: TextStyle(color: textSecondary)),
+    actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('אישור','OK'), style: TextStyle(color: accentGreen)))],
   ));
 
   @override
@@ -7199,7 +7453,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                         style: TextStyle(
                                           color: selected ? bgColor : textSecondary,
                                           fontSize: 11, fontWeight: FontWeight.w700,
-                                          letterSpacing: 1,
+                                          letterSpacing: isHebrew ? 0 : 1,
                                         ),
                                       ),
                                       const SizedBox(height: 4),
@@ -7270,7 +7524,7 @@ class _BookingScreenState extends State<BookingScreen> {
                             _legendDot(tr('פנוי', 'Free'), accentGreen),
                             _legendDot(tr('תפוס', 'Booked'), colorWarning),
                             _legendDot(tr('חסום', 'Closed'), colorError),
-                            _legendDot(tr('אימון', 'Training'), const Color(0xFF14B8A6)),
+                            _legendDot(tr('אימון', 'Training'), accentTeal),
                             _legendDot(tr('קבוע', 'Fixed'), Colors.purple),
                           ],
                         ),
@@ -7281,13 +7535,13 @@ class _BookingScreenState extends State<BookingScreen> {
                             child: Center(
                               child: Column(
                                 children: [
-                                  const Icon(Icons.schedule, color: textSecondary, size: 48),
+                                  Icon(Icons.schedule, color: textSecondary, size: 48),
                                   const SizedBox(height: 12),
-                                  Text(tr('אין שעות פנויות היום', 'No more slots today'), style: const TextStyle(color: textSecondary)),
+                                  Text(tr('אין שעות פנויות היום', 'No more slots today'), style: TextStyle(color: textSecondary)),
                                   const SizedBox(height: 8),
                                   TextButton(
                                     onPressed: () { setState(() { _selDay = 1; _selSlot = null; }); _loadData(); },
-                                    child: Text(tr('צפה במחר ←', 'View tomorrow →'), style: const TextStyle(color: accentGreen)),
+                                    child: Text(tr('צפה במחר ←', 'View tomorrow →'), style: TextStyle(color: accentGreen)),
                                   ),
                                 ],
                               ),
@@ -7339,7 +7593,7 @@ class _BookingScreenState extends State<BookingScreen> {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
       const SizedBox(width: 5),
-      Text(label, style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
+      Text(label, style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
     ]);
   }
 
@@ -7349,13 +7603,13 @@ class _BookingScreenState extends State<BookingScreen> {
       const SizedBox(width: 8),
       Text(
         label,
-        style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600),
+        style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600),
       ),
       const Spacer(),
       Flexible(
         child: Text(
           value,
-          style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
+          style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
           textAlign: TextAlign.end,
           overflow: TextOverflow.ellipsis,
         ),
@@ -7398,9 +7652,9 @@ class _SlotCard extends StatelessWidget {
         badge = isHebrew ? 'סגור' : 'CLOSED';
         break;
       case 'training':
-        bgClr = const Color(0xFF14B8A6).withValues(alpha: 0.1);
-        brdClr = const Color(0xFF14B8A6).withValues(alpha: 0.3);
-        txtClr = const Color(0xFF14B8A6);
+        bgClr = accentTeal.withValues(alpha: 0.1);
+        brdClr = accentTeal.withValues(alpha: 0.3);
+        txtClr = accentTeal;
         badge = trainingName ?? (isHebrew ? 'אימון' : 'TRAINING');
         break;
       case 'fixed':
@@ -7430,6 +7684,7 @@ class _SlotCard extends StatelessWidget {
           children: [
             Text(
               label,
+              textDirection: TextDirection.ltr,
               style: TextStyle(
                 color: txtClr, fontSize: 14, fontWeight: FontWeight.w800,
               ),
@@ -7438,7 +7693,7 @@ class _SlotCard extends StatelessWidget {
             Text(
               badge,
               style: TextStyle(
-                color: txtClr, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1.2,
+                color: txtClr, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1.2,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -7495,7 +7750,7 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
             builder: (ctx) => AlertDialog(
               backgroundColor: cardColor,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusXl)),
-              title: Text(tr('פרטי הזמנה', 'Booking Details'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+              title: Text(tr('פרטי הזמנה', 'Booking Details'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -7509,7 +7764,7 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx),
-                  child: Text(tr('סגור', 'Close'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+                  child: Text(tr('סגור', 'Close'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
                 ),
               ],
             ),
@@ -7525,8 +7780,8 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(children: [
-        Text('$label: ', style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
-        Expanded(child: Text(value, style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700))),
+        Text('$label: ', style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+        Expanded(child: Text(value, style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700))),
       ]),
     );
   }
@@ -7563,7 +7818,7 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
                           border: Border.all(color: borderColor),
                         ),
                         child: Icon(
-                          isHebrew ? Icons.arrow_forward : Icons.arrow_back,
+                          Icons.arrow_back,
                           color: textPrimary, size: 18,
                         ),
                       ),
@@ -7574,22 +7829,22 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
                     child: Container(
                       width: 72, height: 72,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                        color: accentOrange.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Icon(Icons.qr_code_2_rounded, color: Color(0xFFF59E0B), size: 40),
+                      child: Icon(Icons.qr_code_2_rounded, color: accentOrange, size: 40),
                     ),
                   ),
                   const SizedBox(height: spaceMd),
                   Text(
                     tr('קוד גישה', 'Access Code'),
-                    style: const TextStyle(color: textPrimary, fontSize: 24, fontWeight: FontWeight.w900),
+                    style: TextStyle(color: textPrimary, fontSize: 24, fontWeight: FontWeight.w900),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 4),
                   Text(
                     tr('הזן את הקוד שקיבלת בעת ההזמנה', 'Enter the code you received'),
-                    style: const TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
+                    style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: spaceLg),
@@ -7627,7 +7882,9 @@ class _AccessCodeScreenState extends State<AccessCodeScreen> {
 
 // ==================== JOIN BY CODE ====================
 class JoinByCodeScreen extends StatefulWidget {
-  const JoinByCodeScreen({super.key});
+  /// Set when opened from a shared link; the booking loads without typing.
+  final String? bookingId;
+  const JoinByCodeScreen({super.key, this.bookingId});
   @override State<JoinByCodeScreen> createState() => _JoinByCodeScreenState();
 }
 class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
@@ -7636,12 +7893,47 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
   Map<String,dynamic>? _booking; bool _joined=false;
   String get _myName => FirebaseAuth.instance.currentUser?.displayName ?? FirebaseAuth.instance.currentUser?.email ?? '';
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.bookingId != null) _loadFromLink(widget.bookingId!);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _show(String id, Map<String, dynamic> data) {
+    final booking = {'id': id, ...data};
+    _ctrl.text = (data['bookingCode'] ?? '').toString();
+    setState(() { _booking=booking; _joined=((data['players'] as List?)??[]).contains(_myName); _loading=false; });
+  }
+
+  Future<void> _loadFromLink(String id) async {
+    setState(() { _loading=true; _error=''; });
+    try {
+      final d = await FirebaseFirestore.instance.collection('bookings').doc(id).get();
+      if (!mounted) return;
+      if (!d.exists || !_bookingDateIsUpcoming(d.data()?['date'] as String?, DateTime.now())) {
+        setState(() { _error=tr('ההזמנה הזו בוטלה או שכבר הסתיימה','This booking was cancelled or has ended.'); _loading=false; });
+        return;
+      }
+      _show(d.id, d.data()!);
+    } catch (_) {
+      if (mounted) setState(() { _error=tr('לא הצלחנו לפתוח את הקישור, נסה שוב','Could not open the link, please try again.'); _loading=false; });
+    }
+  }
+
   Future<void> _find() async {
     setState(() { _loading=true; _error=''; _booking=null; _success=''; });
-    final s = await FirebaseFirestore.instance.collection('bookings').where('bookingCode', isEqualTo: _ctrl.text.trim()).limit(1).get();
-    if (s.docs.isEmpty) { setState(() { _error=tr('קוד לא תקין','Invalid code.'); _loading=false; }); return; }
-    final data = {'id': s.docs.first.id, ...s.docs.first.data()};
-    setState(() { _booking=data; _joined=((data['players'] as List?)??[]).contains(_myName); _loading=false; });
+    final s = await FirebaseFirestore.instance.collection('bookings').where('bookingCode', isEqualTo: _ctrl.text.trim()).get();
+    // Four-digit codes come back around, so a code may also match old bookings.
+    final now = DateTime.now();
+    final upcoming = s.docs.where((d) => _bookingDateIsUpcoming(d.data()['date'] as String?, now)).toList();
+    if (upcoming.isEmpty) { setState(() { _error=tr('קוד לא תקין','Invalid code.'); _loading=false; }); return; }
+    _show(upcoming.first.id, upcoming.first.data());
   }
 
   /// Padel/tennis join: read-check-write in one transaction so two players
@@ -7721,44 +8013,44 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(backgroundColor: bgColor, appBar: PlayerAppBar(title: tr('הצטרף למשחק','JOIN GAME')),
     body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(32), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400), child: Column(children: [
-      const Icon(Icons.group_add_outlined, color: accentGreen, size: 56), const SizedBox(height: 16),
+      Icon(Icons.group_add_outlined, color: accentGreen, size: 56), const SizedBox(height: 16),
       Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [const Icon(Icons.person_outline, color: accentGreen, size: 16), const SizedBox(width: 6), Text('${tr('מצטרף כ','Joining as')}: $_myName', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13))])),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.person_outline, color: accentGreen, size: 16), const SizedBox(width: 6), Text('${tr('מצטרף כ','Joining as')}: $_myName', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13))])),
       const SizedBox(height: 28),
-      Text(tr('הכנס קוד הזמנה','ENTER BOOKING CODE'), style: const TextStyle(color: textSecondary, fontSize: 11, letterSpacing: 3)), const SizedBox(height: 12),
-      TextField(controller: _ctrl, textAlign: TextAlign.center, style: const TextStyle(color: accentGreen, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 12), keyboardType: TextInputType.number, maxLength: 4,
-        decoration: InputDecoration(hintText: '0000', hintStyle: const TextStyle(color: Color(0xFF333333), fontSize: 32, letterSpacing: 12), filled: true, fillColor: cardColor, counterText: '',
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: borderColor)),
-          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: borderColor)),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: accentGreen, width: 1.5)))),
+      Text(tr('הכנס קוד הזמנה','ENTER BOOKING CODE'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 3)), const SizedBox(height: 12),
+      TextField(controller: _ctrl, textAlign: TextAlign.center, style: TextStyle(color: accentGreen, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 12), keyboardType: TextInputType.number, maxLength: 4,
+        decoration: InputDecoration(hintText: '0000', hintStyle: TextStyle(color: mutedIcon, fontSize: 32, letterSpacing: 12), filled: true, fillColor: cardColor, counterText: '',
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: borderColor)),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: borderColor)),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: accentGreen, width: 1.5)))),
       const SizedBox(height: 16),
       if (_error.isNotEmpty) _errBox(_error),
-      if (_success.isNotEmpty) Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)), child: Text(_success, style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+      if (_success.isNotEmpty) Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)), child: Text(_success, style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
       if (_booking==null&&_success.isEmpty) ...[
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_find,
           style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-          child: _loading?const SizedBox(width:20,height:20,child:CircularProgressIndicator(color:bgColor,strokeWidth:2)):Text(tr('חפש הזמנה','FIND BOOKING'), style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2)))),
+          child: _loading?SizedBox(width:20,height:20,child:CircularProgressIndicator(color:bgColor,strokeWidth:2)):Text(tr('חפש הזמנה','FIND BOOKING'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
       ],
       if (_booking!=null) ...[
         const SizedBox(height: 20),
         Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(_booking!['stadiumName']??'', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 16)),
+            Text(_booking!['stadiumName']??'', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 16)),
             const SizedBox(height: 4),
-            Text('${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}', style: const TextStyle(color: textSecondary, fontSize: 13)),
-            Text('${tr('מארגן','Organizer')}: ${_booking!['userName']??''}', style: const TextStyle(color: textSecondary, fontSize: 12)),
+            Text('${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}', style: TextStyle(color: textSecondary, fontSize: 13)),
+            Text('${tr('מארגן','Organizer')}: ${_booking!['userName']??''}', style: TextStyle(color: textSecondary, fontSize: 12)),
             const SizedBox(height: 8),
-            Semantics(identifier: 'join_players_count', container: true, child: Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/${_booking!['maxPlayers'] ?? 18}', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+            Semantics(identifier: 'join_players_count', container: true, child: Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/${_booking!['maxPlayers'] ?? 18}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
           ])),
         const SizedBox(height: 14),
         if (_success.isEmpty) ...[
           if (!_joined) SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_join,
             style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: Text(tr('הצטרף לקבוצה','JOIN TEAM'), style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2)))),
+            child: Text(tr('הצטרף לקבוצה','JOIN TEAM'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
           if (_joined) ...[
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.check_circle_outline, color: accentGreen), const SizedBox(width: 8), Text(tr('אתה בתוך המשחק',"You're in this game"), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold))])),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.check_circle_outline, color: accentGreen), const SizedBox(width: 8), Text(tr('אתה בתוך המשחק',"You're in this game"), style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))])),
             const SizedBox(height: 10),
             SizedBox(width: double.infinity, height: 46, child: TextButton(onPressed: _loading?null:_leave,
               style: TextButton.styleFrom(backgroundColor: Colors.red.withValues(alpha: 0.08), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: Colors.red.withValues(alpha: 0.3)))),
@@ -7789,6 +8081,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   void _refresh() {
     final user = FirebaseAuth.instance.currentUser;
+    if (user != null && !user.emailVerified) {
+      _refreshVerified(user).then((ok) { if (ok && mounted) setState(() {}); }).catchError((_) {});
+    }
     _future = Future.wait([
       FirebaseFirestore.instance.collection('users').doc(user?.uid).get(),
       FirebaseFirestore.instance.collection('bookings').where('userId', isEqualTo: user?.uid).get(),
@@ -7807,7 +8102,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         future: _future,
         builder: (ctx, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: accentGreen));
+            return Center(child: CircularProgressIndicator(color: accentGreen));
           }
           final userDoc = snap.data?[0] as DocumentSnapshot<Map<String, dynamic>>?;
           final bookingsSnap = snap.data?[1] as QuerySnapshot<Map<String, dynamic>>?;
@@ -7848,14 +8143,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         child: Center(
                           child: Text(
                             init,
-                            style: const TextStyle(color: accentGreen, fontSize: 34, fontWeight: FontWeight.w900),
+                            style: TextStyle(color: accentGreen, fontSize: 34, fontWeight: FontWeight.w900),
                           ),
                         ),
                       ),
                       const SizedBox(height: 12),
                       Text(
                         name.isNotEmpty ? name : tr('שחקן', 'Player'),
-                        style: const TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
+                        style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
                       ),
                       const SizedBox(height: 4),
                       if (user?.emailVerified == false)
@@ -7870,11 +8165,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.warning_amber_rounded, color: colorWarning, size: 12),
+                              Icon(Icons.warning_amber_rounded, color: colorWarning, size: 12),
                               const SizedBox(width: 4),
                               Text(
                                 tr('אימייל לא אומת', 'Email not verified'),
-                                style: const TextStyle(color: colorWarning, fontSize: 10, fontWeight: FontWeight.w800),
+                                style: TextStyle(color: colorWarning, fontSize: 10, fontWeight: FontWeight.w800),
                               ),
                             ],
                           ),
@@ -7933,7 +8228,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _menuItem(Icons.calendar_month_outlined, tr('הלוח זמנים שלי', 'My Schedule'), accentGreen,
                     () => navigateTo(context, const MyBookingsScreen())),
                 const SizedBox(height: 10),
-                _menuItem(Icons.contact_support_outlined, tr('צור קשר', 'Contact Us'), Colors.amber,
+                _menuItem(Icons.contact_support_outlined, tr('צור קשר', 'Contact Us'), accentAmber,
                     () => navigateTo(context, const ContactScreen())),
                 const SizedBox(height: 10),
                 _menuItem(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red, () => _signOut(context)),
@@ -7979,12 +8274,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
               children: [
                 Text(
                   label,
-                  style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 1),
+                  style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: isHebrew ? 0 : 1),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   value,
-                  style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700),
+                  style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700),
                 ),
               ],
             ),
@@ -8002,7 +8297,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Row(children: [
         Icon(icon, color: color, size: 20),
         const SizedBox(width: 14),
-        Text(label, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+        Text(label, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
         const Spacer(),
         const Icon(Icons.arrow_forward_ios, color: Color(0xFF444444), size: 12),
       ]),
@@ -8064,10 +8359,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       firstDate: DateTime(1920),
       lastDate: DateTime(now.year - 5),
       builder: (ctx, child) => Theme(
-        data: ThemeData.dark().copyWith(
-          colorScheme: const ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: bgColor),
-          dialogBackgroundColor: cardColor,
-        ),
+        data: appThemeData(),
         child: child!,
       ),
     );
@@ -8191,17 +8483,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return DropdownButtonFormField<String>(
       value: _gender == null || _gender!.isEmpty ? null : _gender,
       dropdownColor: cardColor,
-      style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+      style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         labelText: tr('מין', 'Gender'),
-        prefixIcon: const Icon(Icons.wc_outlined, color: textSecondary, size: 20),
-        labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+        prefixIcon: Icon(Icons.wc_outlined, color: textSecondary, size: 20),
+        labelStyle: TextStyle(color: textSecondary, fontSize: 13),
         filled: true,
         fillColor: cardColor,
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
       ),
       items: [
         DropdownMenuItem(value: 'male',   child: Text(tr('זכר',  'Male'))),
@@ -8266,7 +8558,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
       setState(_refresh);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(tr('עזבת את המשחק ✓', 'Left the game ✓')),
-        backgroundColor: Colors.orange,
+        backgroundColor: colorWarning,
         duration: const Duration(seconds: 2),
       ));
     } catch (e) {
@@ -8300,7 +8592,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
         child: FutureBuilder(
           future: _future,
           builder: (ctx, AsyncSnapshot<List<QuerySnapshot>> snap) {
-          if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: accentGreen));
+          if (snap.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator(color: accentGreen));
           if (!snap.hasData) return Center(child: Text(tr('שגיאה','Error'), style: const TextStyle(color: Colors.red)));
           final Map<String, QueryDocumentSnapshot> map = {};
           for (final d in snap.data![0].docs) map[d.id]=d;
@@ -8330,9 +8622,9 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
 
   Widget _buildList(BuildContext context, List<QueryDocumentSnapshot> docs, String myName, User? user, String emptyMsg, {bool isPast = false}) {
     if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(isPast ? Icons.history : Icons.calendar_today_outlined, color: const Color(0xFF333333), size: 64),
+      Icon(isPast ? Icons.history : Icons.calendar_today_outlined, color: mutedIcon, size: 64),
       const SizedBox(height: 16),
-      Text(emptyMsg, style: const TextStyle(color: textSecondary, fontSize: 16))]));
+      Text(emptyMsg, style: TextStyle(color: textSecondary, fontSize: 16))]));
 
     return ListView.builder(padding: const EdgeInsets.all(16), itemCount: docs.length, addAutomaticKeepAlives: false, addRepaintBoundaries: true, itemBuilder: (ctx, i) {
       final doc = docs[i]; final b = doc.data() as Map<String,dynamic>;
@@ -8345,14 +8637,33 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
         border: Border.all(color: isPast ? borderColor : isOrg?accentGreen.withValues(alpha: 0.3):Colors.blue.withValues(alpha: 0.2))),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(color: isPast ? const Color(0xFF111111) : isOrg?accentGreen.withValues(alpha: 0.08):Colors.blue.withValues(alpha: 0.06), borderRadius: const BorderRadius.vertical(top: Radius.circular(16))),
+            decoration: BoxDecoration(color: isPast ? bgMuted : isOrg?accentGreen.withValues(alpha: 0.08):Colors.blue.withValues(alpha: 0.06), borderRadius: const BorderRadius.vertical(top: Radius.circular(16))),
             child: Row(children: [
-              Icon(isPast ? Icons.history : (isOrg?Icons.star_outline:Icons.sports_soccer), color: isPast ? textSecondary : (isOrg?Colors.amber:Colors.blue), size: 14),
+              Icon(isPast ? Icons.history : (isOrg?Icons.star_outline:Icons.sports_soccer), color: isPast ? textSecondary : (isOrg?accentAmber:Colors.blue), size: 14),
               const SizedBox(width: 6),
               Text(isPast ? tr('הסתיים','COMPLETED') : (isOrg?tr('מארגן','ORGANIZER'):tr('שחקן','PLAYER')),
-                style: TextStyle(color: isPast ? textSecondary : (isOrg?Colors.amber:Colors.blue), fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                style: TextStyle(color: isPast ? textSecondary : (isOrg?accentAmber:Colors.blue), fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
               const Spacer(),
-              if (isOrg) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)), child: Text(b['bookingCode']??'', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, letterSpacing: 3, fontSize: 13))),
+              if (isOrg) Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)), child: Text(b['bookingCode']??'', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, letterSpacing: 3, fontSize: 13))),
+              if (isOrg && !isPast) ...[
+                const SizedBox(width: 8),
+                Semantics(
+                  identifier: 'booking_share',
+                  button: true,
+                  container: true,
+                  child: GestureDetector(
+                    onTap: () => showDialog(context: context, builder: (dialogContext) => AlertDialog(
+                      scrollable: true,
+                      backgroundColor: cardColor,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      content: BookingSharePanel(bookingId: doc.id, code: (b['bookingCode'] ?? '').toString(), summary: '${b['stadiumName'] ?? ''} • ${b['day'] ?? ''} ${b['date'] ?? ''} • ${b['time'] ?? ''}'),
+                      actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: Text(tr('סגור', 'Close'), style: TextStyle(color: textSecondary)))],
+                    )),
+                    child: Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.share_outlined, color: accentGreen, size: 12), const SizedBox(width: 4), Text(tr('שתף','Share'), style: TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.bold))])),
+                  ),
+                ),
+              ],
               const SizedBox(width: 8),
               GestureDetector(
                 onTap: () => showBookingDetails(context, b),
@@ -8363,24 +8674,24 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
           Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(b['stadiumName']??'', style: TextStyle(color: isPast ? textSecondary : textPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
             const SizedBox(height: 6),
-            Row(children: [const Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:const TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),const Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'',style:const TextStyle(color:textSecondary,fontSize:12))]),
+            Row(children: [Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'', textDirection: TextDirection.ltr,style:TextStyle(color:textSecondary,fontSize:12))]),
             const SizedBox(height: 4),
             Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
-            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 18}', style: const TextStyle(color: textSecondary, fontSize: 12))],
+            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 18}', style: TextStyle(color: textSecondary, fontSize: 12))],
             if (!isPast) ...[
               const SizedBox(height: 12),
               if (isOrg) SizedBox(width: double.infinity, child: TextButton(onPressed: canCancel?() async {
                 final ok=await showDialog<bool>(context:context,builder:(_)=>AlertDialog(backgroundColor:cardColor,
-                  title:Text(tr('ביטול הזמנה?','Cancel Booking?'),style:const TextStyle(color:textPrimary,fontWeight:FontWeight.bold)),
-                  content:Text(tr('זה יבטל את ההזמנה לכל השחקנים.','This cancels for all players.'),style:const TextStyle(color:textSecondary)),
-                  actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:Text(tr('השאר','KEEP'),style:const TextStyle(color:textSecondary))),TextButton(onPressed:()=>Navigator.pop(context,true),child:Text(tr('בטל','CANCEL'),style:const TextStyle(color:Colors.red,fontWeight:FontWeight.bold)))]));
+                  title:Text(tr('ביטול הזמנה?','Cancel Booking?'),style:TextStyle(color:textPrimary,fontWeight:FontWeight.bold)),
+                  content:Text(tr('זה יבטל את ההזמנה לכל השחקנים.','This cancels for all players.'),style:TextStyle(color:textSecondary)),
+                  actions:[TextButton(onPressed:()=>Navigator.pop(context,false),child:Text(tr('השאר','KEEP'),style:TextStyle(color:textSecondary))),TextButton(onPressed:()=>Navigator.pop(context,true),child:Text(tr('בטל','CANCEL'),style:const TextStyle(color:Colors.red,fontWeight:FontWeight.bold)))]));
                 if (ok==true) await _cancelBooking(doc.id);
               }:null,
-                style:TextButton.styleFrom(backgroundColor:canCancel?Colors.red.withValues(alpha:0.08):const Color(0xFF111111),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(8),side:BorderSide(color:canCancel?Colors.red.withValues(alpha:0.3):borderColor))),
+                style:TextButton.styleFrom(backgroundColor:canCancel?Colors.red.withValues(alpha:0.08):bgMuted,shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(8),side:BorderSide(color:canCancel?Colors.red.withValues(alpha:0.3):borderColor))),
                 child:Text(canCancel?tr('בטל הזמנה','CANCEL BOOKING'):tr('לא ניתן לבטל (פחות מ-3 שעות)','CANNOT CANCEL (< 3 HRS)'),style:TextStyle(color:canCancel?Colors.red:const Color(0xFF444444),fontSize:12,fontWeight:FontWeight.w900))))
               else SizedBox(width:double.infinity,child:TextButton(onPressed:canCancel?()async{await _leaveGame(doc.id, myName);}:null,
-                style:TextButton.styleFrom(backgroundColor:canCancel?Colors.orange.withValues(alpha:0.08):const Color(0xFF111111),shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(8),side:BorderSide(color:canCancel?Colors.orange.withValues(alpha:0.3):borderColor))),
-                child:Text(canCancel?tr('עזוב משחק','LEAVE GAME'):tr('לא ניתן לעזוב (פחות מ-3 שעות)','CANNOT LEAVE (< 3 HRS)'),style:TextStyle(color:canCancel?Colors.orange:const Color(0xFF444444),fontSize:12,fontWeight:FontWeight.w900)))),
+                style:TextButton.styleFrom(backgroundColor:canCancel?colorWarning.withValues(alpha:0.08):bgMuted,shape:RoundedRectangleBorder(borderRadius:BorderRadius.circular(8),side:BorderSide(color:canCancel?colorWarning.withValues(alpha:0.3):borderColor))),
+                child:Text(canCancel?tr('עזוב משחק','LEAVE GAME'):tr('לא ניתן לעזוב (פחות מ-3 שעות)','CANNOT LEAVE (< 3 HRS)'),style:TextStyle(color:canCancel?colorWarning:const Color(0xFF444444),fontSize:12,fontWeight:FontWeight.w900)))),
             ],
           ])),
         ]));
@@ -8398,11 +8709,11 @@ class NotificationsScreen extends StatelessWidget {
       body: StreamBuilder(
         stream: FirebaseFirestore.instance.collection('notifications').where('userId', isEqualTo: uid).orderBy('createdAt', descending: true).snapshots(),
         builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+          if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
           final docs = snap.data!.docs;
           if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.notifications_none, color: Color(0xFF333333), size: 64), const SizedBox(height: 16),
-            Text(tr('אין התראות','No notifications'), style: const TextStyle(color: textSecondary, fontSize: 16)),
+            Icon(Icons.notifications_none, color: mutedIcon, size: 64), const SizedBox(height: 16),
+            Text(tr('אין התראות','No notifications'), style: TextStyle(color: textSecondary, fontSize: 16)),
           ]));
           return ListView.builder(padding: const EdgeInsets.all(16), itemCount: docs.length, addAutomaticKeepAlives: false, addRepaintBoundaries: true, itemBuilder: (ctx, i) {
             final n = docs[i].data(); final isRead = n['read'] == true;
@@ -8411,14 +8722,14 @@ class NotificationsScreen extends StatelessWidget {
               child: Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(color: isRead ? cardColor : accentGreen.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(12), border: Border.all(color: isRead ? borderColor : accentGreen.withValues(alpha: 0.3))),
                 child: Row(children: [
-                  Container(width: 36, height: 36, decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), shape: BoxShape.circle), child: const Icon(Icons.notifications_outlined, color: accentGreen, size: 18)),
+                  Container(width: 36, height: 36, decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), shape: BoxShape.circle), child: Icon(Icons.notifications_outlined, color: accentGreen, size: 18)),
                   const SizedBox(width: 12),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(n['title'] ?? '', style: TextStyle(color: isRead ? textSecondary : textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
                     const SizedBox(height: 2),
-                    Text(n['body'] ?? '', style: const TextStyle(color: textSecondary, fontSize: 12)),
+                    Text(n['body'] ?? '', style: TextStyle(color: textSecondary, fontSize: 12)),
                   ])),
-                  if (!isRead) Container(width: 8, height: 8, decoration: const BoxDecoration(color: accentGreen, shape: BoxShape.circle)),
+                  if (!isRead) Container(width: 8, height: 8, decoration: BoxDecoration(color: accentGreen, shape: BoxShape.circle)),
                 ]),
               ),
             );
@@ -8465,7 +8776,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(docId == null ? tr('הוסף סוג', 'Add Type') : tr('ערוך סוג', 'Edit Type'),
-            style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 16),
           _dialogTf(nameCtrl,   tr('שם (עברית)',  'Name (Hebrew)'),  Icons.label_outline),
           const SizedBox(height: 10),
@@ -8473,7 +8784,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
           const SizedBox(height: 10),
           _dialogTf(priceCtrl,  tr('מחיר', 'Price'), Icons.attach_money, type: TextInputType.number),
           const SizedBox(height: 14),
-          Text(tr('אייקון', 'Icon'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('אייקון', 'Icon'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 8),
           Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: icons.map((ic) {
             final isSel = selIcon == ic;
@@ -8485,19 +8796,19 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
             );
           }).toList()),
           const SizedBox(height: 14),
-          Text(tr('צבע', 'Color'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('צבע', 'Color'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 8),
           Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: colors.map((c) {
             final isSel = selColor == c;
             final col = _colorForType(c);
             return GestureDetector(
               onTap: () => setS(() => selColor = c),
-              child: Container(width: 32, height: 32, decoration: BoxDecoration(color: col, shape: BoxShape.circle, border: isSel ? Border.all(color: Colors.white, width: 3) : null)),
+              child: Container(width: 32, height: 32, decoration: BoxDecoration(color: col, shape: BoxShape.circle, border: isSel ? Border.all(color: textPrimary, width: 3) : null)),
             );
           }).toList()),
           const SizedBox(height: 20),
           Row(children: [
-            Expanded(child: TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)))),
+            Expanded(child: TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)))),
             const SizedBox(width: 8),
             Expanded(child: ElevatedButton(
               onPressed: saving ? null : () async {
@@ -8509,7 +8820,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
                 if (ctx.mounted) Navigator.pop(ctx);
               },
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor),
-              child: saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
+              child: saving ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
                 : Text(tr('שמור', 'SAVE'), style: const TextStyle(fontWeight: FontWeight.w900)),
             )),
           ]),
@@ -8521,10 +8832,10 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
   Future<void> _deleteType(String docId) async {
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('מחק סוג?', 'Delete Type?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-      content: Text(tr('האם למחוק סוג הזמנה זה?', 'Delete this booking type?'), style: const TextStyle(color: textSecondary)),
+      title: Text(tr('מחק סוג?', 'Delete Type?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      content: Text(tr('האם למחוק סוג הזמנה זה?', 'Delete this booking type?'), style: TextStyle(color: textSecondary)),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(context, true),  child: Text(tr('מחק',   'Delete'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -8534,26 +8845,26 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: bgColor,
-    appBar: AppBar(backgroundColor: bgColor, elevation: 0, iconTheme: const IconThemeData(color: textSecondary),
+    appBar: AppBar(backgroundColor: bgColor, elevation: 0, iconTheme: IconThemeData(color: textSecondary),
       title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(tr('סוגי הזמנות', 'Booking Types'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
-        Text(widget.stadiumName, style: const TextStyle(color: accentGreen, fontSize: 11)),
+        Text(tr('סוגי הזמנות', 'Booking Types'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
+        Text(widget.stadiumName, style: TextStyle(color: accentGreen, fontSize: 11)),
       ]),
-      actions: [IconButton(icon: const Icon(Icons.add_circle_outline, color: accentGreen), onPressed: () => _showTypeDialog()), _langButton(context)],
+      actions: [IconButton(icon: Icon(Icons.add_circle_outline, color: accentGreen), onPressed: () => _showTypeDialog()), _langButton(context)],
     ),
     body: StreamBuilder(
       stream: _col.where('stadiumId', isEqualTo: widget.stadiumId).snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final docs = snap.data!.docs;
         if (docs.isEmpty) {
           return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.category_outlined, color: textSecondary, size: 56), const SizedBox(height: 16),
-            Text(tr('אין סוגי הזמנות', 'No booking types'), style: const TextStyle(color: textSecondary, fontSize: 15)),
+            Icon(Icons.category_outlined, color: textSecondary, size: 56), const SizedBox(height: 16),
+            Text(tr('אין סוגי הזמנות', 'No booking types'), style: TextStyle(color: textSecondary, fontSize: 15)),
             const SizedBox(height: 20),
             ElevatedButton.icon(
               onPressed: _loading ? null : _loadDefaults,
-              icon: _loading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2)) : const Icon(Icons.download_outlined, size: 18),
+              icon: _loading ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2)) : const Icon(Icons.download_outlined, size: 18),
               label: Text(tr('טען ברירות מחדל', 'Load Defaults')),
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
             ),
@@ -8572,10 +8883,10 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
                 Expanded(child: ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                   leading: Container(width: 40, height: 40, decoration: BoxDecoration(color: col.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)), child: Icon(_iconForType(t['icon'] as String?), color: col, size: 20)),
-                  title: Text('${t['name'] ?? ''} / ${t['nameEn'] ?? ''}', style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+                  title: Text('${t['name'] ?? ''} / ${t['nameEn'] ?? ''}', style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
                   subtitle: Text('₪${t['price'] ?? ''}/2hr', style: TextStyle(color: col.withValues(alpha: 0.8), fontSize: 11)),
                   trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                    IconButton(icon: const Icon(Icons.edit_outlined,   size: 18, color: textSecondary), onPressed: () => _showTypeDialog(type: t, docId: doc.id)),
+                    IconButton(icon: Icon(Icons.edit_outlined,   size: 18, color: textSecondary), onPressed: () => _showTypeDialog(type: t, docId: doc.id)),
                     IconButton(icon: const Icon(Icons.delete_outline, size: 18, color: Colors.red),     onPressed: () => _deleteType(doc.id)),
                   ]),
                 )),
@@ -8587,7 +8898,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
             onPressed: _loading ? null : _loadDefaults,
             icon: const Icon(Icons.refresh, size: 16),
             label: Text(tr('טען ברירות מחדל', 'Load Defaults')),
-            style: OutlinedButton.styleFrom(foregroundColor: textSecondary, side: const BorderSide(color: borderColor), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            style: OutlinedButton.styleFrom(foregroundColor: textSecondary, side: BorderSide(color: borderColor), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
           ),
         ]);
       },
@@ -8617,7 +8928,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(addMode ? tr('הוסף תשלום', 'Add Payment') : tr('אישור תשלום', 'Confirm Payment'),
-            style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 4),
           Text(r['childName'] ?? '', style: const TextStyle(color: Colors.teal, fontSize: 13)),
           const SizedBox(height: 16),
@@ -8629,9 +8940,9 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
             child: DropdownButton<String>(
               value: method, isExpanded: true, dropdownColor: cardColor, underline: const SizedBox(),
               items: [
-                DropdownMenuItem(value: 'bank', child: Text(tr('העברה בנקאית', 'Bank Transfer'), style: const TextStyle(color: textPrimary))),
-                DropdownMenuItem(value: 'visa', child: Text(tr('ויזה / כרטיס', 'Visa / Card'),   style: const TextStyle(color: textPrimary))),
-                DropdownMenuItem(value: 'cash', child: Text(tr('מזומן', 'Cash'),                 style: const TextStyle(color: textPrimary))),
+                DropdownMenuItem(value: 'bank', child: Text(tr('העברה בנקאית', 'Bank Transfer'), style: TextStyle(color: textPrimary))),
+                DropdownMenuItem(value: 'visa', child: Text(tr('ויזה / כרטיס', 'Visa / Card'),   style: TextStyle(color: textPrimary))),
+                DropdownMenuItem(value: 'cash', child: Text(tr('מזומן', 'Cash'),                 style: TextStyle(color: textPrimary))),
               ],
               onChanged: (v) => setS(() => method = v!),
             ),
@@ -8640,7 +8951,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
           _dialogTf(noteCtrl, tr('הערה (אופציונלי)', 'Note (optional)'), Icons.notes_outlined),
           const SizedBox(height: 20),
           Row(children: [
-            Expanded(child: TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)))),
+            Expanded(child: TextButton(onPressed: () => Navigator.pop(dCtx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)))),
             const SizedBox(width: 10),
             Expanded(child: ElevatedButton(
               onPressed: saving ? null : () async {
@@ -8673,7 +8984,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
               },
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor),
               child: saving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
+                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
                 : Text(addMode ? tr('שמור', 'SAVE') : tr('אשר', 'CONFIRM'), style: const TextStyle(fontWeight: FontWeight.w900)),
             )),
           ]),
@@ -8685,14 +8996,14 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
   Future<void> _cancelReg(BuildContext ctx, String docId, String childName) async {
     final ok = await showDialog<bool>(context: ctx, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(childName, style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Text(tr('הסטטוס ישתנה ל-מבוטל', 'Status will change to cancelled'), style: const TextStyle(color: textSecondary, fontSize: 13)),
+        Text(tr('הסטטוס ישתנה ל-מבוטל', 'Status will change to cancelled'), style: TextStyle(color: textSecondary, fontSize: 13)),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('חזור', 'Back'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('חזור', 'Back'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(ctx, true),  child: Text(tr('בטל', 'Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -8704,7 +9015,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
   Widget _regCard(BuildContext ctx, dynamic doc) {
     final r      = doc.data() as Map<String, dynamic>;
     final status = r['status'] as String? ?? 'pending';
-    final Color  statusColor = status == 'paid' ? Colors.green : status == 'cancelled' ? Colors.red : Colors.orange;
+    final Color  statusColor = status == 'paid' ? Colors.green : status == 'cancelled' ? Colors.red : colorWarning;
     final String statusLabel = status == 'paid' ? tr('שולם', 'PAID') : status == 'cancelled' ? tr('מבוטל', 'CANCELLED') : tr('ממתין', 'PENDING');
     final payHistory = (r['paymentHistory'] as List? ?? []);
     final initial = (r['childName'] as String? ?? 'x').isNotEmpty ? (r['childName'] as String)[0].toUpperCase() : '?';
@@ -8720,12 +9031,12 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
               child: Center(child: Text(initial, style: TextStyle(color: statusColor, fontWeight: FontWeight.w900, fontSize: 16)))),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(r['childName'] ?? '', style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
-              Text('${tr('גיל', 'Age')} ${r['childAge'] ?? ''}', style: const TextStyle(color: textSecondary, fontSize: 11)),
+              Text(r['childName'] ?? '', style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+              Text('${tr('גיל', 'Age')} ${r['childAge'] ?? ''}', style: TextStyle(color: textSecondary, fontSize: 11)),
             ])),
             Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(6), border: Border.all(color: statusColor.withValues(alpha: 0.4))),
-              child: Text(statusLabel, style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1))),
+              child: Text(statusLabel, style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1))),
           ]),
         ),
         Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 4), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -8760,7 +9071,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
                   return Padding(padding: const EdgeInsets.only(top: 3),
                     child: Row(children: [
                       const Icon(Icons.check_circle, color: Colors.green, size: 11), const SizedBox(width: 4),
-                      Text('₪${pm['amount']} • ${pm['method'] ?? ''} • $date', style: const TextStyle(color: textSecondary, fontSize: 11)),
+                      Text('₪${pm['amount']} • ${pm['method'] ?? ''} • $date', style: TextStyle(color: textSecondary, fontSize: 11)),
                     ]));
                 }),
               ])),
@@ -8770,8 +9081,8 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
           if (status == 'pending')
             TextButton.icon(
               onPressed: () => _confirmPayment(ctx, doc.id as String, r),
-              icon: const Icon(Icons.check_circle_outline, size: 14, color: accentGreen),
-              label: Text(tr('אשר תשלום', 'Confirm Payment'), style: const TextStyle(color: accentGreen, fontSize: 11)),
+              icon: Icon(Icons.check_circle_outline, size: 14, color: accentGreen),
+              label: Text(tr('אשר תשלום', 'Confirm Payment'), style: TextStyle(color: accentGreen, fontSize: 11)),
               style: TextButton.styleFrom(backgroundColor: accentGreen.withValues(alpha: 0.08), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
             ),
           if (status == 'paid')
@@ -8795,8 +9106,8 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
 
   Widget _regList(BuildContext ctx, List<dynamic> docs, String emptyMsg) {
     if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      const Icon(Icons.inbox, color: textSecondary, size: 48), const SizedBox(height: 12),
-      Text(emptyMsg, style: const TextStyle(color: textSecondary)),
+      Icon(Icons.inbox, color: textSecondary, size: 48), const SizedBox(height: 12),
+      Text(emptyMsg, style: TextStyle(color: textSecondary)),
     ]));
     return ListView(padding: const EdgeInsets.all(14), children: [
       ...docs.map((doc) => _regCard(ctx, doc)),
@@ -8811,13 +9122,13 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: bgColor, elevation: 0,
-        iconTheme: const IconThemeData(color: textSecondary),
+        iconTheme: IconThemeData(color: textSecondary),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Text(tr('נרשמים', 'REGISTRATIONS'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: 2)),
+          Text(tr('נרשמים', 'REGISTRATIONS'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 14, letterSpacing: isHebrew ? 0 : 2)),
           Text(widget.groupName, style: const TextStyle(color: Colors.teal, fontSize: 12)),
         ]),
         actions: [_langButton(context)],
-        bottom: const TabBar(
+        bottom: TabBar(
           indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
           tabs: [Tab(text: 'ממתינים'), Tab(text: 'פעילים'), Tab(text: 'בוטלו')],
         ),
@@ -8825,7 +9136,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
       body: StreamBuilder(
         stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: widget.groupId).snapshots(),
         builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+          if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
           final docs      = snap.data!.docs;
           final pending   = docs.where((d) { final s = d.data()['status'] as String?; return s == null || s == 'pending'; }).toList();
           final paid      = docs.where((d) => d.data()['status'] == 'paid').toList();
@@ -8870,7 +9181,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(docId == null ? tr('הוסף קבוצה', 'Add Group') : tr('ערוך קבוצה', 'Edit Group'),
-            style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 16),
           _dialogTf(nameCtrl,   tr('שם קבוצה (עברית)',   'Group Name (Hebrew)'),   Icons.groups_outlined),
           const SizedBox(height: 10),
@@ -8888,7 +9199,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
             Expanded(child: _dialogTf(capacityCtrl, tr('קיבולת', 'Capacity'), Icons.people_outline,  type: TextInputType.number)),
           ]),
           const SizedBox(height: 12),
-          Text(tr('סוג תשלום', 'Payment Type'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('סוג תשלום', 'Payment Type'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 6),
           Row(children: [
             Expanded(child: GestureDetector(
@@ -8906,7 +9217,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
             )),
           ]),
           const SizedBox(height: 12),
-          Text(tr('ימי אימון', 'Training Days'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('ימי אימון', 'Training Days'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 6),
           Wrap(spacing: 6, runSpacing: 6, children: List.generate(7, (i) {
             final isSel = selectedDays.contains(i);
@@ -8921,46 +9232,46 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
             );
           })),
           const SizedBox(height: 12),
-          Text(tr('שעות אימון', 'Training Hours'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('שעות אימון', 'Training Hours'), style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: 6),
           Row(children: [
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(tr('התחלה', 'Start'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+              Text(tr('התחלה', 'Start'), style: TextStyle(color: textSecondary, fontSize: 11)),
               const SizedBox(height: 4),
               DropdownButton<String>(value: startTime, isExpanded: true, dropdownColor: cardColor,
-                items: allStartTimes.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(color: textPrimary, fontSize: 13)))).toList(),
+                items: allStartTimes.map((t) => DropdownMenuItem(value: t, child: Text(t, style: TextStyle(color: textPrimary, fontSize: 13)))).toList(),
                 onChanged: (v) => setS(() => startTime = v!)),
             ])),
-            const Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('—', style: TextStyle(color: textSecondary, fontSize: 18))),
+            Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('—', style: TextStyle(color: textSecondary, fontSize: 18))),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(tr('סיום', 'End'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+              Text(tr('סיום', 'End'), style: TextStyle(color: textSecondary, fontSize: 11)),
               const SizedBox(height: 4),
               DropdownButton<String>(value: endTime, isExpanded: true, dropdownColor: cardColor,
-                items: allStartTimes.map((t) => DropdownMenuItem(value: t, child: Text(t, style: const TextStyle(color: textPrimary, fontSize: 13)))).toList(),
+                items: allStartTimes.map((t) => DropdownMenuItem(value: t, child: Text(t, style: TextStyle(color: textPrimary, fontSize: 13)))).toList(),
                 onChanged: (v) => setS(() => endTime = v!)),
             ])),
           ]),
           const SizedBox(height: 10),
-          TextField(controller: descCtrl, maxLines: 3, style: const TextStyle(color: textPrimary, fontSize: 13),
-            decoration: InputDecoration(hintText: tr('תיאור הקבוצה...', 'Group description...'), hintStyle: const TextStyle(color: textSecondary),
-              prefixIcon: const Icon(Icons.description_outlined, color: textSecondary, size: 18),
+          TextField(controller: descCtrl, maxLines: 3, style: TextStyle(color: textPrimary, fontSize: 13),
+            decoration: InputDecoration(hintText: tr('תיאור הקבוצה...', 'Group description...'), hintStyle: TextStyle(color: textSecondary),
+              prefixIcon: Icon(Icons.description_outlined, color: textSecondary, size: 18),
               filled: true, fillColor: bgColor,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: accentGreen, width: 1.5)))),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: accentGreen, width: 1.5)))),
           const SizedBox(height: 10),
-          TextField(controller: bankCtrl, maxLines: 2, style: const TextStyle(color: textPrimary, fontSize: 13),
-            decoration: InputDecoration(hintText: tr('פרטי בנק...', 'Bank details...'), hintStyle: const TextStyle(color: textSecondary),
-              prefixIcon: const Icon(Icons.account_balance_outlined, color: textSecondary, size: 18),
+          TextField(controller: bankCtrl, maxLines: 2, style: TextStyle(color: textPrimary, fontSize: 13),
+            decoration: InputDecoration(hintText: tr('פרטי בנק...', 'Bank details...'), hintStyle: TextStyle(color: textSecondary),
+              prefixIcon: Icon(Icons.account_balance_outlined, color: textSecondary, size: 18),
               filled: true, fillColor: bgColor,
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: borderColor)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: accentGreen, width: 1.5)))),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: accentGreen, width: 1.5)))),
           const SizedBox(height: 10),
           _dialogTf(officeCtrl, tr('כתובת משרד', 'Office Address'), Icons.location_on_outlined),
           const SizedBox(height: 20),
           Row(children: [
-            Expanded(child: TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)))),
+            Expanded(child: TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)))),
             const SizedBox(width: 8),
             Expanded(child: ElevatedButton(
               onPressed: saving ? null : () async {
@@ -8996,7 +9307,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
               },
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor),
               child: saving
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
+                ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2))
                 : Text(tr('שמור', 'SAVE'), style: const TextStyle(fontWeight: FontWeight.w900)),
             )),
           ]),
@@ -9008,14 +9319,14 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
   Future<void> _deleteGroup(BuildContext context, String docId, String name) async {
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('מחק קבוצה?', 'Delete Group?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      title: Text(tr('מחק קבוצה?', 'Delete Group?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(name, style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Text(tr('האם למחוק את הקבוצה? כל הרישומים יימחקו גם הם.', 'Delete group? All registrations will be deleted too.'), style: const TextStyle(color: textSecondary)),
+        Text(tr('האם למחוק את הקבוצה? כל הרישומים יימחקו גם הם.', 'Delete group? All registrations will be deleted too.'), style: TextStyle(color: textSecondary)),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(context, true),  child: Text(tr('מחק',  'Delete'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -9039,13 +9350,13 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
     body: StreamBuilder(
       stream: FirebaseFirestore.instance.collection('training_groups').where('stadiumId', isEqualTo: stadiumId).snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final docs = snap.data!.docs;
         if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.groups_outlined, color: textSecondary, size: 56), const SizedBox(height: 16),
-          Text(tr('אין קבוצות אימון', 'No training groups'), style: const TextStyle(color: textSecondary, fontSize: 15)),
+          Icon(Icons.groups_outlined, color: textSecondary, size: 56), const SizedBox(height: 16),
+          Text(tr('אין קבוצות אימון', 'No training groups'), style: TextStyle(color: textSecondary, fontSize: 15)),
           const SizedBox(height: 6),
-          Text(tr('לחץ + להוסיף', 'Tap + to add'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+          Text(tr('לחץ + להוסיף', 'Tap + to add'), style: TextStyle(color: textSecondary, fontSize: 12)),
         ]));
         return ListView(padding: const EdgeInsets.all(16), children: [
           _secTitle(tr('קבוצות אימון', 'TRAINING GROUPS')), const SizedBox(height: 12),
@@ -9066,9 +9377,9 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
                       child: const Icon(Icons.groups, color: Colors.teal, size: 20)),
                     const SizedBox(width: 10),
                     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(groupDisplayName, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)),
+                      Text(groupDisplayName, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)),
                       if ((g['ageGroup'] as String? ?? '').isNotEmpty)
-                        Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+                        Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: TextStyle(color: textSecondary, fontSize: 11)),
                     ])),
                     Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                       Text('₪${g['price']} $priceLabel', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
@@ -9077,21 +9388,21 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
                         builder: (_, rs) {
                           final count = rs.data?.docs.length ?? 0;
                           final cap   = g['capacity'] as int? ?? 0;
-                          return Text('$count${cap > 0 ? '/$cap' : ''} ${tr('נרשמים', 'reg.')}', style: const TextStyle(color: textSecondary, fontSize: 11));
+                          return Text('$count${cap > 0 ? '/$cap' : ''} ${tr('נרשמים', 'reg.')}', style: TextStyle(color: textSecondary, fontSize: 11));
                         },
                       ),
                     ]),
                   ]),
                 ),
                 Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 4), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  if (dayList.isNotEmpty) Row(children: [const Icon(Icons.calendar_today_outlined, color: textSecondary, size: 13), const SizedBox(width: 6), Expanded(child: Text(dayList, style: const TextStyle(color: textSecondary, fontSize: 12)))]),
+                  if (dayList.isNotEmpty) Row(children: [Icon(Icons.calendar_today_outlined, color: textSecondary, size: 13), const SizedBox(width: 6), Expanded(child: Text(dayList, style: TextStyle(color: textSecondary, fontSize: 12)))]),
                   if ((g['startTime'] as String? ?? '').isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Row(children: [const Icon(Icons.access_time_outlined, color: textSecondary, size: 13), const SizedBox(width: 6), Text('${g['startTime']} — ${g['endTime']}', style: const TextStyle(color: textSecondary, fontSize: 12))]),
+                    Row(children: [Icon(Icons.access_time_outlined, color: textSecondary, size: 13), const SizedBox(width: 6), Text('${g['startTime']} — ${g['endTime']}', style: TextStyle(color: textSecondary, fontSize: 12))]),
                   ],
                   if ((g['coach'] as String? ?? '').isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Row(children: [const Icon(Icons.person_outline, color: textSecondary, size: 13), const SizedBox(width: 6), Text(g['coach'], style: const TextStyle(color: textSecondary, fontSize: 12))]),
+                    Row(children: [Icon(Icons.person_outline, color: textSecondary, size: 13), const SizedBox(width: 6), Text(g['coach'], style: TextStyle(color: textSecondary, fontSize: 12))]),
                   ],
                 ])),
                 Padding(padding: const EdgeInsets.fromLTRB(10, 4, 10, 10), child: Row(children: [
@@ -9104,8 +9415,8 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(child: TextButton.icon(
                     onPressed: () => _showGroupDialog(context, group: g, docId: doc.id),
-                    icon: const Icon(Icons.edit_outlined, size: 15, color: textSecondary),
-                    label: Text(tr('ערוך', 'Edit'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+                    icon: Icon(Icons.edit_outlined, size: 15, color: textSecondary),
+                    label: Text(tr('ערוך', 'Edit'), style: TextStyle(color: textSecondary, fontSize: 11)),
                     style: TextButton.styleFrom(backgroundColor: borderColor.withValues(alpha: 0.3), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
                   )),
                   const SizedBox(width: 6),
@@ -9184,10 +9495,10 @@ class _StadiumImageScreenState extends State<StadiumImageScreen> {
   Future<void> _removeImage() async {
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('להסיר תמונה?', 'Remove image?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-      content: Text(tr('תחזור לתמונת ברירת המחדל', 'Will restore default image'), style: const TextStyle(color: textSecondary)),
+      title: Text(tr('להסיר תמונה?', 'Remove image?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      content: Text(tr('תחזור לתמונת ברירת המחדל', 'Will restore default image'), style: TextStyle(color: textSecondary)),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(context, true),  child: Text(tr('הסר',  'Remove'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -9202,7 +9513,7 @@ class _StadiumImageScreenState extends State<StadiumImageScreen> {
     backgroundColor: bgColor,
     appBar: _appBar('${tr('תמונת רקע', 'IMAGE')} — ${widget.stadiumName}', context),
     body: _loading
-      ? const Center(child: CircularProgressIndicator(color: accentGreen))
+      ? Center(child: CircularProgressIndicator(color: accentGreen))
       : ListView(padding: const EdgeInsets.all(16), children: [
           _secTitle(tr('תצוגה מקדימה', 'PREVIEW')), const SizedBox(height: 10),
           ClipRRect(borderRadius: BorderRadius.circular(16),
@@ -9211,41 +9522,41 @@ class _StadiumImageScreenState extends State<StadiumImageScreen> {
               decoration: BoxDecoration(
                 gradient: _currentUrl == null
                   ? LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-                      colors: [accentGreen.withValues(alpha: 0.25), const Color(0xFF0D0D0D)])
+                      colors: [accentGreen.withValues(alpha: 0.25), gradientEnd])
                   : null,
               ),
               child: _currentUrl != null
                 ? Image.network(_currentUrl!, fit: BoxFit.cover,
                     cacheHeight: 400, cacheWidth: 1200,
                     loadingBuilder: (_, child, p) => p == null ? child
-                      : const Center(child: CircularProgressIndicator(color: accentGreen)),
+                      : Center(child: CircularProgressIndicator(color: accentGreen)),
                     errorBuilder: (_, __, ___) => Center(child: Icon(Icons.broken_image, color: Colors.red.withValues(alpha: 0.6), size: 48)))
                 : Center(child: Icon(Icons.sports_soccer, color: accentGreen.withValues(alpha: 0.6), size: 80)),
             )),
           const SizedBox(height: 6),
           if (_currentUrl == null)
-            Text(tr('ברירת מחדל (אין תמונה)', 'Default (no image)'), textAlign: TextAlign.center, style: const TextStyle(color: textSecondary, fontSize: 11)),
+            Text(tr('ברירת מחדל (אין תמונה)', 'Default (no image)'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 11)),
           const SizedBox(height: 24),
           if (_uploading) ...[
             Container(padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
               child: Column(children: [
                 Row(children: [
-                  const Icon(Icons.cloud_upload_outlined, color: accentGreen, size: 18), const SizedBox(width: 8),
-                  Text(tr('מעלה תמונה...', 'Uploading...'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                  Icon(Icons.cloud_upload_outlined, color: accentGreen, size: 18), const SizedBox(width: 8),
+                  Text(tr('מעלה תמונה...', 'Uploading...'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
                 ]),
                 const SizedBox(height: 10),
                 ClipRRect(borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(value: _progress, backgroundColor: bgColor, valueColor: const AlwaysStoppedAnimation<Color>(accentGreen), minHeight: 8)),
+                  child: LinearProgressIndicator(value: _progress, backgroundColor: bgColor, valueColor: AlwaysStoppedAnimation<Color>(accentGreen), minHeight: 8)),
                 const SizedBox(height: 6),
-                Text('${(_progress * 100).toInt()}%', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                Text('${(_progress * 100).toInt()}%', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
               ])),
           ] else ...[
             SizedBox(width: double.infinity, height: 54,
               child: ElevatedButton.icon(
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
-                label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+                label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
                 style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
@@ -9364,10 +9675,10 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
   Future<void> _removeImage() async {
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('להסיר תמונה?', 'Remove image?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
-      content: Text(tr('תחזור לתמונת ברירת המחדל', 'Will restore default image'), style: const TextStyle(color: textSecondary)),
+      title: Text(tr('להסיר תמונה?', 'Remove image?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      content: Text(tr('תחזור לתמונת ברירת המחדל', 'Will restore default image'), style: TextStyle(color: textSecondary)),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(context, true),  child: Text(tr('הסר',  'Remove'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -9419,7 +9730,7 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
       fit: BoxFit.cover,
       cacheHeight: 400, cacheWidth: 1200,
       loadingBuilder: (_, child, p) => p == null ? child
-          : const Center(child: CircularProgressIndicator(color: accentGreen)),
+          : Center(child: CircularProgressIndicator(color: accentGreen)),
       errorBuilder: (_, __, ___) => Center(
         child: Icon(Icons.broken_image, color: Colors.red.withValues(alpha: 0.6), size: 48),
       ),
@@ -9432,14 +9743,14 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
     appBar: AppBar(
       backgroundColor: bgColor,
       elevation: 0,
-      iconTheme: const IconThemeData(color: textSecondary),
+      iconTheme: IconThemeData(color: textSecondary),
       title: Text(
         '${tr('תמונת מתחם', 'VENUE IMAGE')} — ${widget.venueName}',
-        style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 16),
+        style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2, fontSize: 16),
       ),
     ),
     body: _loading
-      ? const Center(child: CircularProgressIndicator(color: accentGreen))
+      ? Center(child: CircularProgressIndicator(color: accentGreen))
       : ListView(padding: const EdgeInsets.all(16), children: [
           _secTitle(tr('תצוגה מקדימה', 'PREVIEW')), const SizedBox(height: 10),
           ClipRRect(borderRadius: BorderRadius.circular(radiusXl),
@@ -9448,37 +9759,37 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
               decoration: BoxDecoration(
                 gradient: _currentUrl == null
                   ? LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-                      colors: [accentGreen.withValues(alpha: 0.25), const Color(0xFF0D0D0D)])
+                      colors: [accentGreen.withValues(alpha: 0.25), gradientEnd])
                   : null,
               ),
               child: _currentUrl != null
                 ? _buildPreview(_currentUrl!)
-                : const Center(child: Icon(Icons.stadium_rounded, color: accentGreen, size: 80)),
+                : Center(child: Icon(Icons.stadium_rounded, color: accentGreen, size: 80)),
             )),
           const SizedBox(height: 6),
           if (_currentUrl == null)
-            Text(tr('ברירת מחדל (אין תמונה)', 'Default (no image)'), textAlign: TextAlign.center, style: const TextStyle(color: textSecondary, fontSize: 11)),
+            Text(tr('ברירת מחדל (אין תמונה)', 'Default (no image)'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 11)),
           const SizedBox(height: 24),
           if (_uploading) ...[
             Container(padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
               child: Column(children: [
                 Row(children: [
-                  const Icon(Icons.cloud_upload_outlined, color: accentGreen, size: 18), const SizedBox(width: 8),
-                  Text(tr('מעלה תמונה...', 'Uploading...'), style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                  Icon(Icons.cloud_upload_outlined, color: accentGreen, size: 18), const SizedBox(width: 8),
+                  Text(tr('מעלה תמונה...', 'Uploading...'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
                 ]),
                 const SizedBox(height: 10),
                 ClipRRect(borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(value: _progress, backgroundColor: bgColor, valueColor: const AlwaysStoppedAnimation<Color>(accentGreen), minHeight: 8)),
+                  child: LinearProgressIndicator(value: _progress, backgroundColor: bgColor, valueColor: AlwaysStoppedAnimation<Color>(accentGreen), minHeight: 8)),
                 const SizedBox(height: 6),
-                Text('${(_progress * 100).toInt()}%', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
+                Text('${(_progress * 100).toInt()}%', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)),
               ])),
           ] else ...[
             SizedBox(width: double.infinity, height: 54,
               child: ElevatedButton.icon(
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
-                label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+                label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
                 style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
@@ -9506,7 +9817,7 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
                 Text(
                   tr('מומלץ: יחס 16:9 • מקסימום ~700KB (התמונה נדחסת אוטומטית ל-800px)',
                      'Recommended: 16:9 • max ~700KB (auto-compressed to 800px width)'),
-                  style: const TextStyle(color: textSecondary, fontSize: 11),
+                  style: TextStyle(color: textSecondary, fontSize: 11),
                 ),
               ])),
             ])),
@@ -9538,7 +9849,7 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
     body: StreamBuilder(
       stream: FirebaseFirestore.instance.collection('training_groups').where('venueId', isEqualTo: widget.venueId).snapshots(),
       builder: (ctx, snap) {
-        if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final filtered = snap.data!.docs.where((d) => _matchesAge(d.data()['ageGroup'] as String?)).toList();
         return Column(children: [
           SizedBox(height: 52,
@@ -9565,8 +9876,8 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
           Expanded(
             child: filtered.isEmpty
               ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  const Icon(Icons.groups_outlined, color: textSecondary, size: 56), const SizedBox(height: 12),
-                  Text(tr('לא נמצאו קבוצות', 'No groups found'), style: const TextStyle(color: textSecondary, fontSize: 15)),
+                  Icon(Icons.groups_outlined, color: textSecondary, size: 56), const SizedBox(height: 12),
+                  Text(tr('לא נמצאו קבוצות', 'No groups found'), style: TextStyle(color: textSecondary, fontSize: 15)),
                 ]))
               : ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 16), children: filtered.map((doc) {
                   final g = doc.data();
@@ -9587,9 +9898,9 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
                               child: const Icon(Icons.groups, color: Colors.teal, size: 22)),
                             const SizedBox(width: 10),
                             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(groupName, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)),
+                              Text(groupName, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 14)),
                               if ((g['ageGroup'] as String? ?? '').isNotEmpty)
-                                Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: const TextStyle(color: textSecondary, fontSize: 11)),
+                                Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: TextStyle(color: textSecondary, fontSize: 11)),
                             ])),
                             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                               Text('₪${g['price']} $priceLabel', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
@@ -9598,7 +9909,7 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
                                 builder: (_, rs) {
                                   final count = rs.data?.docs.length ?? 0;
                                   final cap   = g['capacity'] as int? ?? 0;
-                                  return Text('$count${cap > 0 ? '/$cap' : ''} ${tr('נרשמים', 'reg.')}', style: const TextStyle(color: textSecondary, fontSize: 11));
+                                  return Text('$count${cap > 0 ? '/$cap' : ''} ${tr('נרשמים', 'reg.')}', style: TextStyle(color: textSecondary, fontSize: 11));
                                 },
                               ),
                             ]),
@@ -9650,7 +9961,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
         backgroundColor: cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(tr('הרשמה לקבוצה', 'Register to Group'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+          Text(tr('הרשמה לקבוצה', 'Register to Group'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 4),
           Text(isHebrew ? (widget.group['name'] ?? '') : (widget.group['nameEn'] ?? widget.group['name'] ?? ''),
             style: const TextStyle(color: Colors.teal, fontSize: 13)),
@@ -9725,11 +10036,11 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
         backgroundColor: cardColor,
         title: Row(children: [
           const Icon(Icons.check_circle_outline, color: Colors.teal, size: 26), const SizedBox(width: 10),
-          Expanded(child: Text(tr('נרשמת בהצלחה!', 'Registered!'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold))),
+          Expanded(child: Text(tr('נרשמת בהצלחה!', 'Registered!'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold))),
         ]),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(tr('ההרשמה התקבלה. הסטטוס יעודכן לאחר האישור.', 'Registration received. Status will be updated after approval.'),
-            style: const TextStyle(color: textSecondary, fontSize: 13)),
+            style: TextStyle(color: textSecondary, fontSize: 13)),
           if (bank.isNotEmpty) ...[
             const SizedBox(height: 14),
             Container(padding: const EdgeInsets.all(12),
@@ -9737,7 +10048,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(tr('פרטי תשלום:', 'Payment Details:'), style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 12)),
                 const SizedBox(height: 6),
-                Text(bank, style: const TextStyle(color: textPrimary, fontSize: 13)),
+                Text(bank, style: TextStyle(color: textPrimary, fontSize: 13)),
                 const SizedBox(height: 8),
                 SizedBox(width: double.infinity, child: TextButton.icon(
                   onPressed: () => Clipboard.setData(ClipboardData(text: bank)),
@@ -9784,10 +10095,10 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
               child: const Icon(Icons.groups, color: Colors.teal, size: 32)),
             const SizedBox(width: 14),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(groupName, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
+              Text(groupName, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
               if ((g['ageGroup'] as String? ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: const TextStyle(color: textSecondary, fontSize: 13)),
+                Text(tr('גיל: ${g['ageGroup']}', 'Age: ${g['ageGroup']}'), style: TextStyle(color: textSecondary, fontSize: 13)),
               ],
               const SizedBox(height: 4),
               Text('₪${g['price']} $priceLabel', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.w900, fontSize: 16)),
@@ -9798,7 +10109,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
         Container(padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(tr('פרטי קבוצה', 'Group Info'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+            Text(tr('פרטי קבוצה', 'Group Info'), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
             const SizedBox(height: 12),
             if (dayList.isNotEmpty) _groupInfoRow(Icons.calendar_today_outlined, dayList),
             if ((g['startTime'] as String? ?? '').isNotEmpty) ...[const SizedBox(height: 8), _groupInfoRow(Icons.access_time_outlined, '${g['startTime']} — ${g['endTime']}')],
@@ -9811,9 +10122,9 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
           Container(padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor)),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(tr('תיאור', 'Description'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+              Text(tr('תיאור', 'Description'), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
               const SizedBox(height: 8),
-              Text(g['description'], style: const TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
+              Text(g['description'], style: TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
             ])),
           const SizedBox(height: 12),
         ],
@@ -9831,7 +10142,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                 decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(14), border: Border.all(color: borderColor)),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Text(tr('מקומות', 'Spots'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 2)),
+                    Text(tr('מקומות', 'Spots'), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
                     Text(cap > 0 ? '$count / $cap' : '$count', style: TextStyle(color: full ? Colors.red : Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
                   ]),
                   if (cap > 0) ...[
@@ -9862,7 +10173,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                   child: ElevatedButton.icon(
                     onPressed: () => _register(context),
                     icon: const Icon(Icons.how_to_reg),
-                    label: Text(tr('הירשם לקבוצה', 'REGISTER'), style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+                    label: Text(tr('הירשם לקבוצה', 'REGISTER'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   )),
               const SizedBox(height: 24),
@@ -9886,11 +10197,11 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
       context: ctx,
       builder: (_) => AlertDialog(
         backgroundColor: cardColor,
-        title: Text(tr('פרטי תשלום', 'Payment Details'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+        title: Text(tr('פרטי תשלום', 'Payment Details'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
         content: bank.isEmpty
-          ? Text(tr('לא הוזנו פרטי תשלום', 'No payment details provided'), style: const TextStyle(color: textSecondary))
+          ? Text(tr('לא הוזנו פרטי תשלום', 'No payment details provided'), style: TextStyle(color: textSecondary))
           : Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(bank, style: const TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
+              Text(bank, style: TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
               const SizedBox(height: 10),
               TextButton.icon(
                 onPressed: () => Clipboard.setData(ClipboardData(text: bank)),
@@ -9899,7 +10210,7 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
                 style: TextButton.styleFrom(backgroundColor: Colors.teal.withValues(alpha: 0.08), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               ),
             ]),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('סגור', 'Close'), style: const TextStyle(color: textSecondary)))],
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('סגור', 'Close'), style: TextStyle(color: textSecondary)))],
       ),
     );
   }
@@ -9907,14 +10218,14 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
   Future<void> _cancelRegistration(BuildContext ctx, String docId, String groupName) async {
     final ok = await showDialog<bool>(context: ctx, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
-      title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(groupName, style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Text(tr('האם אתה בטוח שרצית לבטל את הרישום?', 'Are you sure you want to cancel?'), style: const TextStyle(color: textSecondary)),
+        Text(tr('האם אתה בטוח שרצית לבטל את הרישום?', 'Are you sure you want to cancel?'), style: TextStyle(color: textSecondary)),
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('חזור', 'Back'), style: const TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('חזור', 'Back'), style: TextStyle(color: textSecondary))),
         TextButton(onPressed: () => Navigator.pop(ctx, true),  child: Text(tr('בטל רישום', 'Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
       ],
     ));
@@ -9932,20 +10243,20 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
       body: StreamBuilder(
         stream: FirebaseFirestore.instance.collection('training_registrations').where('parentUserId', isEqualTo: uid).snapshots(),
         builder: (ctx, snap) {
-          if (!snap.hasData) return const Center(child: CircularProgressIndicator(color: accentGreen));
+          if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
           final docs = snap.data!.docs;
           if (docs.isEmpty) return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            const Icon(Icons.assignment, color: textSecondary, size: 56), const SizedBox(height: 12),
-            Text(tr('אין רישומים עדיין', 'No registrations yet'), style: const TextStyle(color: textSecondary, fontSize: 15)),
+            Icon(Icons.assignment, color: textSecondary, size: 56), const SizedBox(height: 12),
+            Text(tr('אין רישומים עדיין', 'No registrations yet'), style: TextStyle(color: textSecondary, fontSize: 15)),
             const SizedBox(height: 6),
-            Text(tr('חפש קבוצת אימון מהמסך הראשי', 'Find a training group from home screen'), style: const TextStyle(color: textSecondary, fontSize: 12)),
+            Text(tr('חפש קבוצת אימון מהמסך הראשי', 'Find a training group from home screen'), style: TextStyle(color: textSecondary, fontSize: 12)),
           ]));
           return ListView(padding: const EdgeInsets.all(16), children: [
             _secTitle(tr('הרישומים שלי', 'MY REGISTRATIONS')), const SizedBox(height: 12),
             ...docs.map((doc) {
               final r = doc.data();
               final status = r['status'] as String? ?? 'pending';
-              final Color statusColor  = status == 'paid' ? Colors.green : status == 'cancelled' ? Colors.red : Colors.orange;
+              final Color statusColor  = status == 'paid' ? Colors.green : status == 'cancelled' ? Colors.red : colorWarning;
               final String statusLabel = status == 'paid' ? tr('שולם', 'PAID') : status == 'cancelled' ? tr('מבוטל', 'CANCELLED') : tr('ממתין', 'PENDING');
               return Container(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -9955,10 +10266,10 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
                     decoration: BoxDecoration(color: Colors.teal.withValues(alpha: 0.06), borderRadius: const BorderRadius.vertical(top: Radius.circular(14))),
                     child: Row(children: [
                       const Icon(Icons.groups, color: Colors.teal, size: 20), const SizedBox(width: 8),
-                      Expanded(child: Text(r['groupName'] ?? '', style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13))),
+                      Expanded(child: Text(r['groupName'] ?? '', style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13))),
                       Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(6), border: Border.all(color: statusColor.withValues(alpha: 0.4))),
-                        child: Text(statusLabel, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1))),
+                        child: Text(statusLabel, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1))),
                     ]),
                   ),
                   Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 4), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -9987,7 +10298,7 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
                               return Padding(padding: const EdgeInsets.only(top: 3),
                                 child: Row(children: [
                                   const Icon(Icons.check_circle, color: Colors.green, size: 11), const SizedBox(width: 4),
-                                  Text('₪${pm['amount']} • ${pm['method'] ?? ''} • $date', style: const TextStyle(color: textSecondary, fontSize: 11)),
+                                  Text('₪${pm['amount']} • ${pm['method'] ?? ''} • $date', style: TextStyle(color: textSecondary, fontSize: 11)),
                                 ]));
                             }),
                           ])),
@@ -10048,7 +10359,7 @@ class ContactScreen extends StatelessWidget {
           // If permissions are denied or the doc is missing, fall through to
           // the default contact card with the hard-coded email — never hang.
           if (snap.connectionState == ConnectionState.waiting && !snap.hasError) {
-            return const Center(child: CircularProgressIndicator(color: accentGreen));
+            return Center(child: CircularProgressIndicator(color: accentGreen));
           }
           final hasDoc = snap.hasData && snap.data!.exists;
           final data = hasDoc ? (snap.data!.data() ?? <String, dynamic>{}) : <String, dynamic>{};
@@ -10064,23 +10375,23 @@ class ContactScreen extends StatelessWidget {
               padding: const EdgeInsets.all(spaceLg),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Colors.amber.withValues(alpha: 0.18), Colors.amber.withValues(alpha: 0.04)],
+                  colors: [accentAmber.withValues(alpha: 0.18), accentAmber.withValues(alpha: 0.04)],
                   begin: Alignment.topLeft, end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(radiusXl),
-                border: Border.all(color: Colors.amber.withValues(alpha: 0.25)),
+                border: Border.all(color: accentAmber.withValues(alpha: 0.25)),
               ),
               child: Row(children: [
                 Container(
                   width: 56, height: 56,
-                  decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
-                  child: const Icon(Icons.support_agent_rounded, color: Colors.amber, size: 28),
+                  decoration: BoxDecoration(color: accentAmber.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(14)),
+                  child: Icon(Icons.support_agent_rounded, color: accentAmber, size: 28),
                 ),
                 const SizedBox(width: spaceMd),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(tr('צור קשר', 'CONTACT'), style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 2)),
+                  Text(tr('צור קשר', 'CONTACT'), style: TextStyle(color: accentAmber, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: isHebrew ? 0 : 2)),
                   const SizedBox(height: 4),
-                  Text(tr('פרטי הקשר שלנו', 'Our contact details'), style: const TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900)),
+                  Text(tr('פרטי הקשר שלנו', 'Our contact details'), style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900)),
                 ])),
               ]),
             ),
@@ -10120,9 +10431,9 @@ class ContactScreen extends StatelessWidget {
                   border: Border.all(color: borderColor),
                 ),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(tr('הערה', 'Note'), style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
+                  Text(tr('הערה', 'Note'), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: isHebrew ? 0 : 1.5)),
                   const SizedBox(height: 6),
-                  Text(note, style: const TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
+                  Text(note, style: TextStyle(color: textPrimary, fontSize: 13, height: 1.5)),
                 ]),
               ),
           ]);
@@ -10210,11 +10521,11 @@ class _AppContactConfigScreenState extends State<AppContactConfigScreen> {
       appBar: AdminAppBar(
         title: Text(
           tr('ערוך פרטי קשר', 'Edit Contact Info'),
-          style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 1, fontSize: 16),
+          style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1, fontSize: 16),
         ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: accentGreen))
+          ? Center(child: CircularProgressIndicator(color: accentGreen))
           : SafeArea(
               child: Center(
                 child: SingleChildScrollView(
@@ -10259,16 +10570,16 @@ class _AppContactConfigScreenState extends State<AppContactConfigScreen> {
                             TextFormField(
                               controller: _noteCtrl,
                               maxLines: 4,
-                              style: const TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+                              style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                               decoration: InputDecoration(
                                 labelText: tr('הערה', 'Note'),
-                                labelStyle: const TextStyle(color: textSecondary, fontSize: 13),
+                                labelStyle: TextStyle(color: textSecondary, fontSize: 13),
                                 filled: true,
                                 fillColor: cardColor,
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: borderColor)),
-                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: const BorderSide(color: accentGreen, width: 2)),
+                                border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
                               ),
                             ),
                             const SizedBox(height: spaceLg),
@@ -10291,8 +10602,8 @@ class _AppContactConfigScreenState extends State<AppContactConfigScreen> {
 
 // ==================== HELPERS ====================
 AppBar _appBar(String t, BuildContext context) => AppBar(
-  backgroundColor: bgColor, elevation: 0, iconTheme: const IconThemeData(color: textSecondary),
-  title: Text(t, style: const TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 16)),
+  backgroundColor: bgColor, elevation: 0, iconTheme: IconThemeData(color: textSecondary),
+  title: Text(t, style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2, fontSize: 16)),
   actions: [_langButton(context)],
 );
 
@@ -10319,14 +10630,14 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
     return AppBar(
       backgroundColor: bgColor,
       elevation: 0,
-      iconTheme: const IconThemeData(color: textSecondary),
+      iconTheme: IconThemeData(color: textSecondary),
       title: widget.title != null
           ? Text(
               widget.title!,
-              style: const TextStyle(
+              style: TextStyle(
                 color: textPrimary,
                 fontWeight: FontWeight.w900,
-                letterSpacing: 2,
+                letterSpacing: isHebrew ? 0 : 2,
                 fontSize: 16,
               ),
               maxLines: 1,
@@ -10350,7 +10661,7 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
               alignment: Alignment.center,
               children: [
                 IconButton(
-                  icon: const Icon(Icons.notifications_outlined, color: textSecondary),
+                  icon: Icon(Icons.notifications_outlined, color: textSecondary),
                   tooltip: tr('התראות', 'Notifications'),
                   onPressed: () => Navigator.push(
                     context,
@@ -10363,11 +10674,11 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      decoration: const BoxDecoration(color: accentGreen, shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: accentGreen, shape: BoxShape.circle),
                       child: Center(
                         child: Text(
                           '$count',
-                          style: const TextStyle(color: bgColor, fontSize: 9, fontWeight: FontWeight.w900),
+                          style: TextStyle(color: bgColor, fontSize: 9, fontWeight: FontWeight.w900),
                         ),
                       ),
                     ),
@@ -10379,11 +10690,11 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
         // Hamburger menu (matches VenueSelectionScreen header)
         PopupMenuButton<String>(
           tooltip: tr('תפריט', 'Menu'),
-          icon: const Icon(Icons.menu, color: textSecondary, size: 22),
+          icon: Icon(Icons.menu, color: textSecondary, size: 22),
           color: cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(radiusLg),
-            side: const BorderSide(color: borderColor),
+            side: BorderSide(color: borderColor),
           ),
           offset: const Offset(0, 48),
           itemBuilder: (ctx) => [
@@ -10395,10 +10706,18 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
               value: 'bookings',
               child: _menuRow(Icons.calendar_month_outlined, tr('ההזמנות שלי', 'My Bookings'), accentGreen),
             ),
+            PopupMenuItem<String>(
+              value: 'join',
+              child: _menuRow(Icons.qr_code_2_rounded, tr('הצטרפות עם קוד', 'Join with a code'), accentGreen),
+            ),
             const PopupMenuDivider(),
             PopupMenuItem<String>(
               value: 'contact',
-              child: _menuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), Colors.amber),
+              child: _menuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), accentAmber),
+            ),
+            PopupMenuItem<String>(
+              value: 'theme',
+              child: _menuRow(isLightMode ? Icons.dark_mode_outlined : Icons.light_mode_outlined, isLightMode ? tr('מצב כהה', 'Dark mode') : tr('מצב בהיר', 'Light mode'), textPrimary),
             ),
             PopupMenuItem<String>(
               value: 'language',
@@ -10418,8 +10737,14 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
               case 'bookings':
                 navigateTo(context, const MyBookingsScreen(),);
                 break;
+              case 'join':
+                navigateTo(context, const JoinByCodeScreen());
+                break;
               case 'contact':
                 navigateTo(context, const ContactScreen());
+                break;
+              case 'theme':
+                toggleAppTheme();
                 break;
               case 'language':
                 toggleAppLanguage(context);
@@ -10431,16 +10756,16 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
                     backgroundColor: cardColor,
                     title: Text(
                       tr('יציאה?', 'Sign Out?'),
-                      style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
+                      style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
                     ),
                     content: Text(
                       tr('האם אתה בטוח שברצונך לצאת?', 'Are you sure you want to sign out?'),
-                      style: const TextStyle(color: textSecondary),
+                      style: TextStyle(color: textSecondary),
                     ),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context, false),
-                        child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)),
+                        child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)),
                       ),
                       ElevatedButton(
                         onPressed: () => Navigator.pop(context, true),
@@ -10469,7 +10794,7 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
         const SizedBox(width: spaceSm),
         Text(
           label,
-          style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+          style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ],
     );
@@ -10500,17 +10825,17 @@ class _AdminAppBarState extends State<AdminAppBar> {
     return AppBar(
       backgroundColor: bgColor,
       elevation: 0,
-      iconTheme: const IconThemeData(color: textSecondary),
+      iconTheme: IconThemeData(color: textSecondary),
       title: widget.title,
       bottom: widget.bottom,
       actions: [
         PopupMenuButton<String>(
           tooltip: tr('תפריט', 'Menu'),
-          icon: const Icon(Icons.menu, color: textSecondary, size: 22),
+          icon: Icon(Icons.menu, color: textSecondary, size: 22),
           color: cardColor,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(radiusLg),
-            side: const BorderSide(color: borderColor),
+            side: BorderSide(color: borderColor),
           ),
           offset: const Offset(0, 48),
           itemBuilder: (ctx) {
@@ -10524,13 +10849,17 @@ class _AdminAppBarState extends State<AdminAppBar> {
               const PopupMenuDivider(),
               PopupMenuItem<String>(
                 value: 'contact',
-                child: _adminMenuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), Colors.amber),
+                child: _adminMenuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), accentAmber),
               ),
               if (isSuperAdmin)
                 PopupMenuItem<String>(
                   value: 'edit_contact',
                   child: _adminMenuRow(Icons.edit_note_outlined, tr('ערוך פרטי קשר', 'Edit Contact Info'), Colors.purple),
                 ),
+              PopupMenuItem<String>(
+                value: 'theme',
+                child: _adminMenuRow(isLightMode ? Icons.dark_mode_outlined : Icons.light_mode_outlined, isLightMode ? tr('מצב כהה', 'Dark mode') : tr('מצב בהיר', 'Light mode'), textPrimary),
+              ),
               PopupMenuItem<String>(
                 value: 'language',
                 child: _adminMenuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
@@ -10553,6 +10882,9 @@ class _AdminAppBarState extends State<AdminAppBar> {
               case 'edit_contact':
                 navigateTo(context, const AppContactConfigScreen());
                 break;
+              case 'theme':
+                toggleAppTheme();
+                break;
               case 'language':
                 toggleAppLanguage(context);
                 break;
@@ -10563,16 +10895,16 @@ class _AdminAppBarState extends State<AdminAppBar> {
                     backgroundColor: cardColor,
                     title: Text(
                       tr('יציאה?', 'Sign Out?'),
-                      style: const TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
+                      style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
                     ),
                     content: Text(
                       tr('האם אתה בטוח שברצונך לצאת?', 'Are you sure you want to sign out?'),
-                      style: const TextStyle(color: textSecondary),
+                      style: TextStyle(color: textSecondary),
                     ),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context, false),
-                        child: Text(tr('ביטול', 'Cancel'), style: const TextStyle(color: textSecondary)),
+                        child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary)),
                       ),
                       ElevatedButton(
                         onPressed: () => Navigator.pop(context, true),
@@ -10601,18 +10933,18 @@ class _AdminAppBarState extends State<AdminAppBar> {
         const SizedBox(width: spaceSm),
         Text(
           label,
-          style: const TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+          style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ],
     );
   }
 }
 
-Widget _secTitle(String t) => Text(t, style: const TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 3));
+Widget _secTitle(String t) => Text(t, style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 3));
 
 Widget _groupInfoRow(IconData icon, String text) => Row(children: [
   Icon(icon, color: textSecondary, size: 13), const SizedBox(width: 6),
-  Expanded(child: Text(text, style: const TextStyle(color: textSecondary, fontSize: 12))),
+  Expanded(child: Text(text, style: TextStyle(color: textSecondary, fontSize: 12))),
 ]);
 
 Widget _periodBtn(String label, String value, String current, VoidCallback onTap) {
@@ -10631,7 +10963,7 @@ Widget _statCard(String label, String value, IconData icon, Color color) => Cont
     Icon(icon, color: color, size: 22),
     const SizedBox(width: 10),
     Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: const TextStyle(color: textSecondary, fontSize: 10, letterSpacing: 1), maxLines: 1, overflow: TextOverflow.ellipsis),
+      Text(label, style: TextStyle(color: textSecondary, fontSize: 10, letterSpacing: isHebrew ? 0 : 1), maxLines: 1, overflow: TextOverflow.ellipsis),
       Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
     ])),
   ]));
@@ -10643,14 +10975,14 @@ Widget _bookCard(Map<String,dynamic> b, {BuildContext? context}) {
     child: Container(margin: const EdgeInsets.only(bottom: 10), padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: borderColor)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Expanded(child: Text(b['stadiumName']??'', style: const TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis)),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.amber.withValues(alpha: 0.3))), child: Text(b['bookingCode']??'', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 12))),
+          Expanded(child: Text(b['stadiumName']??'', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 14), maxLines: 1, overflow: TextOverflow.ellipsis)),
+          Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: accentAmber.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(6), border: Border.all(color: accentAmber.withValues(alpha: 0.3))), child: Text(b['bookingCode']??'', style: TextStyle(color: accentAmber, fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 12))),
           if (context != null) ...[const SizedBox(width: 8), const Icon(Icons.info_outline, color: Colors.blue, size: 16)],
         ]),
         const SizedBox(height: 6),
-        Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: const TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 4),
-        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: const TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
