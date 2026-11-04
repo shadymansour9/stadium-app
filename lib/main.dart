@@ -165,9 +165,9 @@ List<Map<String, String>> defaultSlotsForStadium(Map<String, dynamic>? stadium) 
 }
 
 // ==================== DEMO MODE ====================
-// Demo venues are only merged into `venues` / `allStadiums` when the app is
-// loaded with ?demo=1 (see main()). Real players on the normal URL never see
-// them. Demo bookings are seeded by scripts/seed_demo.js and tagged isDemo.
+// Padel/tennis clubs are merged into `venues` / `allStadiums` for everyone at
+// startup (see main()). Their bookings keep the isDemo tag, and sample ones
+// are seeded by scripts/seed_demo.js.
 bool kDemoMode = false;
 
 const String demoAdminEmail = 'demo.admin@stadium-demo.app'; // reserved for the planned demo admin view
@@ -1436,11 +1436,8 @@ void main() async {
   if (kIsWeb && Uri.base.queryParameters['e2e'] == '1') {
     SemanticsBinding.instance.ensureSemantics();
   }
-  // Demo venues (padel/tennis) only with ?demo=1. Independent of ?e2e=1, so
-  // `/?demo=1&e2e=1` enables both.
-  if (kIsWeb && Uri.base.queryParameters['demo'] == '1') {
-    enableDemoVenues();
-  }
+  // Padel/tennis clubs are shown to everyone, on web and in the native apps.
+  enableDemoVenues();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Offline persistence — must be set before any Firestore call.
