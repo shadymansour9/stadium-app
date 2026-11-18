@@ -5734,17 +5734,6 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
 
                         const SizedBox(height: spaceLg),
 
-                        // Kids' schools: their own section so sign-up is easy to find.
-                        if (venues.any((v) => v['hasTraining'] == true)) ...[
-                          appSectionTitle(tr('בתי ספר לספורט — הרשמה', 'SPORTS SCHOOLS — SIGN UP')),
-                          for (final v in venues.where((v) => v['hasTraining'] == true))
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: spaceSm),
-                              child: _SchoolSignupCard(venue: v),
-                            ),
-                          const SizedBox(height: spaceMd),
-                        ],
-
                         appSectionTitle(tr('איפה משחקים?', 'WHERE TO PLAY?')),
 
                         if (showSportFilter)
@@ -6130,7 +6119,7 @@ class SchoolsScreen extends StatelessWidget {
   }
 }
 
-/// Home-screen card that opens a venue's kids' school groups for sign-up.
+/// School-tab card that opens a venue's kids' school groups for sign-up.
 /// Semantics identifier `school_signup_{venueId}` for E2E.
 class _SchoolSignupCard extends StatelessWidget {
   final Map<String, dynamic> venue;
@@ -6203,7 +6192,6 @@ class _VenueCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final id = venue['id'] as String;
     final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
-    final hasTraining = venue['hasTraining'] == true;
     final emoji = venue['emoji'] as String? ?? '🏟️';
     final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
     final city = cityLabel(venueCityKey(venue));
@@ -6286,21 +6274,6 @@ class _VenueCard extends StatelessWidget {
                 ),
               ),
             ]),
-            if (hasTraining)
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: Semantics(
-                  identifier: 'venue_training_$id',
-                  button: true,
-                  container: true,
-                  child: TextButton.icon(
-                    onPressed: () => navigateTo(context, TrainingGroupsListScreen(venueId: id, venueName: name)),
-                    icon: Icon(Icons.school_outlined, size: 16, color: colorInfo),
-                    label: Text(tr('אימונים לילדים', 'Kids training'), style: TextStyle(color: colorInfo, fontSize: 12, fontWeight: FontWeight.w800)),
-                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(0, 32)),
-                  ),
-                ),
-              ),
           ]),
         ),
       ),
