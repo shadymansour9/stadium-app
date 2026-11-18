@@ -326,7 +326,7 @@ Future<Widget> homeScreenForUser(User user) async {
   try {
     if (isOwnerEmail(lower)) {
       if (await _refreshVerified(user)) return const SuperAdminScreen();
-      return const VenueSelectionScreen();
+      return const PlayerShell();
     }
     final doc = await FirebaseFirestore.instance
         .collection('court_admins').doc(lower).get()
@@ -336,7 +336,7 @@ Future<Widget> homeScreenForUser(User user) async {
       return CourtAdminScreen(stadiumIds: ids);
     }
   } catch (_) {/* fall through to the player home */}
-  return const VenueSelectionScreen();
+  return const PlayerShell();
 }
 
 /// Picks up an email verified moments ago, including in the ID token the
@@ -348,6 +348,139 @@ Future<bool> _refreshVerified(User user) async {
   await fresh.getIdToken(true);
   return true;
 }
+
+/// The player's main screen: Home, My Bookings, School, Join a game, Profile tabs.
+class PlayerShell extends StatefulWidget {
+  final int initialTab;
+  const PlayerShell({super.key, this.initialTab = 0});
+  @override
+  State<PlayerShell> createState() => _PlayerShellState();
+}
+
+class _PlayerShellState extends State<PlayerShell> {
+  /// The shell on screen, so menus on pushed screens can switch its tab.
+  static _PlayerShellState? current;
+
+  late int _tab = widget.initialTab;
+  // Bumped on every tab change so My Bookings / Profile reload fresh data.
+  int _visit = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    current = this;
+  }
+
+  @override
+  void dispose() {
+    if (current == this) current = null;
+    super.dispose();
+  }
+
+  void select(int tab) => setState(() { _tab = tab; _visit++; });
+
+  Widget _item(int i, String id, IconData icon, String label) {
+    final sel = _tab == i;
+    return Expanded(
+      child: Semantics(
+        identifier: id,
+        button: true,
+        selected: sel,
+        container: true,
+        child: InkWell(
+          onTap: () => select(i),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sel ? accentGreen.withValues(alpha: 0.15) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, size: 22, color: sel ? accentGreen : textSecondary),
+              ),
+              const SizedBox(height: 3),
+              Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, fontWeight: sel ? FontWeight.w800 : FontWeight.w600, color: sel ? accentGreen : textSecondary)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      // Back on another tab returns to Home before leaving the app.
+      canPop: _tab == 0,
+      onPopInvokedWithResult: (didPop, _) { if (!didPop) select(0); },
+      child: Scaffold(
+        backgroundColor: bgColor,
+        body: IndexedStack(index: _tab, children: [
+          const VenueSelectionScreen(),
+          _tab == 1 ? MyBookingsScreen(key: ValueKey('bookings$_visit')) : const SizedBox.shrink(),
+          _tab == 2 ? SchoolsScreen(key: ValueKey('school$_visit')) : const SizedBox.shrink(),
+          _tab == 3 ? JoinByCodeScreen(key: ValueKey('join$_visit')) : const SizedBox.shrink(),
+          _tab == 4 ? ProfileScreen(key: ValueKey('profile$_visit')) : const SizedBox.shrink(),
+        ]),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: cardColor,
+            border: Border(top: BorderSide(color: borderColor)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Row(children: [
+              _item(0, 'tab_home', Icons.home_rounded, tr('בית', 'Home')),
+              _item(1, 'tab_bookings', Icons.calendar_month_rounded, tr('ההזמנות שלי', 'My bookings')),
+              _item(2, 'tab_school', Icons.school_rounded, tr('בית ספר', 'School')),
+              _item(3, 'tab_join', Icons.group_add_rounded, tr('הצטרף למשחק', 'Join a game')),
+              _item(4, 'tab_profile', Icons.person_rounded, tr('פרופיל', 'Profile')),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Opens a tab of the player's main screen from anywhere (a pushed screen
+/// returns to it first); without one, as admins have, opens the page itself.
+void openPlayerTab(BuildContext context, int tab) {
+  final shell = _PlayerShellState.current;
+  if (shell != null && shell.mounted) {
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    shell.select(tab);
+    return;
+  }
+  const pages = [VenueSelectionScreen(), MyBookingsScreen(), SchoolsScreen(), JoinByCodeScreen(), ProfileScreen()];
+  navigateTo(context, pages[tab]);
+}
+
+/// Venue card -> straight to the times of its first court; the booking
+/// screen switches between the venue's courts.
+void openVenueBooking(BuildContext context, Map<String, dynamic> venue) {
+  final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
+  final courts = [
+    for (final id in ids) ...allStadiums.where((s) => s['id'] == id),
+  ];
+  if (courts.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('אין כרגע מגרשים להזמנה במקום הזה', 'No courts to book here right now')),
+      backgroundColor: colorWarning,
+    ));
+    return;
+  }
+  navigateTo(context, BookingScreen(stadium: courts.first, courts: courts));
+}
+
+/// Shown once per device: the "how it works" card on Home.
+bool seenWelcome = false;
 
 /// Booking opened through a shared link (?join=<booking id>), waiting until
 /// someone is signed in.
@@ -1766,7 +1899,9 @@ void main() async {
   enableDemoVenues();
   if (kIsWeb) pendingJoinBookingId = Uri.base.queryParameters['join'];
   try {
-    isLightMode = (await SharedPreferences.getInstance()).getBool('lightMode') ?? false;
+    final prefs = await SharedPreferences.getInstance();
+    isLightMode = prefs.getBool('lightMode') ?? false;
+    seenWelcome = prefs.getBool('seenWelcome') ?? false;
   } catch (_) {/* keep the default look */}
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
@@ -2591,7 +2726,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           if (mounted) {
                             final nav = Navigator.of(context);
                             nav.pushAndRemoveUntil(
-                              MaterialPageRoute(builder: (_) => const VenueSelectionScreen()),
+                              MaterialPageRoute(builder: (_) => const PlayerShell()),
                               (route) => false,
                             );
                             openPendingJoin(nav);
@@ -5335,7 +5470,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
     final fresh = FirebaseAuth.instance.currentUser;
     final Widget home = fresh == null ? widget : await homeScreenForUser(fresh);
     if (!mounted) return;
-    if (home is VenueSelectionScreen) {
+    if (home is PlayerShell) {
       setState(() {});
     } else {
       Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => home), (route) => false);
@@ -5439,7 +5574,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                                   ),
                                   if (!isMobile)
                                     Text(
-                                      tr('בחר את המתחם שלך', 'Choose your venue'),
+                                      tr('הזמנת מגרשים בקלות', 'Book courts easily'),
                                       style: TextStyle(
                                         color: textSecondary,
                                         fontSize: 12,
@@ -5452,35 +5587,6 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                      const SizedBox(width: spaceSm),
-                      Semantics(
-                        identifier: 'home_join_code',
-                        button: true,
-                        container: true,
-                        child: InkWell(
-                          onTap: () => navigateTo(context, const JoinByCodeScreen()),
-                          borderRadius: BorderRadius.circular(10),
-                          child: Container(
-                            height: 40,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(
-                              color: accentGreen.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: accentGreen.withValues(alpha: 0.35)),
-                            ),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Icon(Icons.qr_code_2_rounded, color: accentGreen, size: 18),
-                              if (!isNarrow) ...[
-                                const SizedBox(width: 6),
-                                Text(
-                                  isMobile ? tr('קוד', 'Code') : tr('הצטרפות עם קוד', 'Join with a code'),
-                                  style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w800),
-                                ),
-                              ],
-                            ]),
-                          ),
                         ),
                       ),
                       const SizedBox(width: spaceSm),
@@ -5524,63 +5630,22 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Hero Section
-                        Container(
-                          width: double.infinity,
-                          padding: EdgeInsets.symmetric(horizontal: isMobile ? spaceMd : spaceLg, vertical: isMobile ? spaceSm : spaceLg),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                accentGreen.withValues(alpha: 0.15),
-                                accentGreen.withValues(alpha: 0.03),
-                              ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(radiusXl),
-                            border: Border.all(color: accentGreen.withValues(alpha: 0.2)),
-                          ),
-                          child: Row(children: [
-                            if (!isMobile) ...[
-                            Container(
-                              width: isMobile ? 44 : 56,
-                              height: isMobile ? 44 : 56,
-                              decoration: BoxDecoration(
-                                color: accentGreen.withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Icon(Icons.waving_hand_rounded, color: accentGreen, size: isMobile ? 22 : 28),
-                            ),
-                            SizedBox(width: isMobile ? spaceSm : spaceMd),
-                            ],
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    greeting,
-                                    style: TextStyle(
-                                      color: textPrimary,
-                                      fontSize: isMobile ? 14 : 18,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    tr('בחר מתחם להזמנת מגרש או הרשמה לאימון', 'Pick a venue to book a field or join training'),
-                                    style: TextStyle(
-                                      color: textSecondary,
-                                      fontSize: isMobile ? 11.5 : 13.5,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ]),
+                        Text(
+                          greeting,
+                          style: TextStyle(color: textPrimary, fontSize: isMobile ? 18 : 22, fontWeight: FontWeight.w900),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
+                        const SizedBox(height: 2),
+                        Text(
+                          tr('בחר מקום, בחר שעה, והזמן חברים', 'Pick a place, pick a time, invite friends'),
+                          style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+
+                        if (!seenWelcome) ...[
+                          const SizedBox(height: spaceMd),
+                          _welcomeCard(),
+                        ],
 
                         Builder(builder: (ctx) {
                           final user = FirebaseAuth.instance.currentUser;
@@ -5669,7 +5734,18 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
 
                         const SizedBox(height: spaceLg),
 
-                        appSectionTitle(tr('מתחמים זמינים', 'AVAILABLE VENUES')),
+                        // Kids' schools: their own section so sign-up is easy to find.
+                        if (venues.any((v) => v['hasTraining'] == true)) ...[
+                          appSectionTitle(tr('בתי ספר לספורט — הרשמה', 'SPORTS SCHOOLS — SIGN UP')),
+                          for (final v in venues.where((v) => v['hasTraining'] == true))
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: spaceSm),
+                              child: _SchoolSignupCard(venue: v),
+                            ),
+                          const SizedBox(height: spaceMd),
+                        ],
+
+                        appSectionTitle(tr('איפה משחקים?', 'WHERE TO PLAY?')),
 
                         if (showSportFilter)
                           _SportFilterChips(
@@ -5692,7 +5768,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: spaceLg),
                               child: Text(
-                                tr('אין מתחמים שמתאימים לסינון', 'No venues match these filters'),
+                                tr('אין מקומות שמתאימים לסינון', 'No places match these filters'),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w600),
                               ),
@@ -5701,31 +5777,21 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
 
                         const SizedBox(height: spaceXs),
 
-                        GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: crossAxisCount,
-                            mainAxisSpacing: spaceMd,
-                            crossAxisSpacing: spaceMd,
-                            childAspectRatio: isMobile ? 1.05 : 0.95,
-                            mainAxisExtent: isMobile ? 300 : null,
-                          ),
-                          itemCount: shownVenues.length,
-                          itemBuilder: (ctx, i) {
-                            final v = shownVenues[i];
-                            return _VenueCard(
-                              venue: v,
-                              identifier: 'venue_card_${v['id']}',
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(builder: (_) => VenueHomeScreen(venue: v)),
-                                );
-                              },
-                            );
-                          },
-                        ),
+                        LayoutBuilder(builder: (ctx, box) {
+                          final w = (box.maxWidth - spaceSm * (crossAxisCount - 1)) / crossAxisCount;
+                          return Wrap(spacing: spaceSm, runSpacing: spaceSm, children: [
+                            for (final v in shownVenues)
+                              SizedBox(
+                                width: w,
+                                child: _VenueCard(
+                                  venue: v,
+                                  identifier: 'venue_card_${v['id']}',
+                                  onTap: () => openVenueBooking(context, v),
+                                ),
+                              ),
+                          ]);
+                        }),
+                        const SizedBox(height: spaceLg),
                       ],
                     ),
                   ),
@@ -5733,17 +5799,60 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
               ),
             ),
 
-            // ============== FOOTER ==============
-            Container(
-              padding: const EdgeInsets.all(spaceMd),
-              child: Text(
-                'STADIUM v1.0  •  © 2026',
-                style: TextStyle(color: textTertiary, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 1.5),
-                textAlign: TextAlign.center,
-              ),
-            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _welcomeCard() {
+    Widget step(int n, IconData icon, String text) => Expanded(
+      child: Column(children: [
+        Container(
+          width: 40, height: 40,
+          decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.15), shape: BoxShape.circle),
+          child: Icon(icon, color: accentGreen, size: 20),
+        ),
+        const SizedBox(height: 6),
+        Text('$n. $text',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: textPrimary, fontSize: 12, fontWeight: FontWeight.w700, height: 1.3)),
+      ]),
+    );
+    return Semantics(
+      identifier: 'welcome_card',
+      container: true,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(spaceMd, spaceMd, spaceMd, spaceSm),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(radiusXl),
+          border: Border.all(color: accentGreen.withValues(alpha: 0.35)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(tr('איך זה עובד?', 'How it works'), style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.w900)),
+          const SizedBox(height: spaceSm),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            step(1, Icons.place_rounded, tr('בוחרים מקום', 'Pick a place')),
+            step(2, Icons.schedule_rounded, tr('בוחרים שעה ומזמינים', 'Pick a time and book')),
+            step(3, Icons.send_rounded, tr('שולחים לחברים קישור להצטרפות', 'Send friends a join link')),
+          ]),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: Semantics(
+              identifier: 'welcome_dismiss',
+              button: true,
+              container: true,
+              child: TextButton(
+                onPressed: () {
+                  setState(() => seenWelcome = true);
+                  SharedPreferences.getInstance().then((p) => p.setBool('seenWelcome', true)).catchError((_) => false);
+                },
+                child: Text(tr('הבנתי', 'Got it'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+              ),
+            ),
+          ),
+        ]),
       ),
     );
   }
@@ -5804,14 +5913,9 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
         offset: const Offset(0, 48),
         itemBuilder: (ctx) => [
           PopupMenuItem<String>(
-            value: 'profile',
-            child: _menuRow(Icons.person_outline, tr('הפרופיל שלי', 'My Profile'), accentGreen),
+            value: 'contact',
+            child: _menuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), accentAmber),
           ),
-          PopupMenuItem<String>(
-            value: 'bookings',
-            child: _menuRow(Icons.calendar_month_outlined, tr('ההזמנות שלי', 'My Bookings'), accentGreen),
-          ),
-          const PopupMenuDivider(),
           PopupMenuItem<String>(
             value: 'theme',
             child: _menuRow(isLightMode ? Icons.dark_mode_outlined : Icons.light_mode_outlined, isLightMode ? tr('מצב כהה', 'Dark mode') : tr('מצב בהיר', 'Light mode'), textPrimary),
@@ -5828,11 +5932,8 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
         ],
         onSelected: (value) async {
           switch (value) {
-            case 'profile':
-              navigateTo(context, const ProfileScreen(),);
-              break;
-            case 'bookings':
-              navigateTo(context, const MyBookingsScreen(),);
+            case 'contact':
+              navigateTo(context, const ContactScreen());
               break;
             case 'theme':
               toggleAppTheme();
@@ -5923,11 +6024,14 @@ class _SportFilterChips extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: spaceSm),
-      child: Wrap(spacing: 8, runSpacing: 8, children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
         _chip('all', tr('הכל', 'All'), null, selected == null, () => onSelected(null)),
         for (final s in sports)
           _chip(s.toLowerCase(), sportLabel(s), sportIcon(s), selected == s, () => onSelected(s)),
-      ]),
+        ].expand((w) => [w, const SizedBox(width: 8)]).toList()),
+      ),
     );
   }
 }
@@ -5965,11 +6069,125 @@ class _CityFilterChips extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: spaceSm),
-      child: Wrap(spacing: 8, runSpacing: 8, children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
         _chip('all', tr('כל הערים', 'All cities'), selected == null, () => onSelected(null)),
         for (final c in cities)
           _chip(c.toLowerCase().replaceAll(' ', '_'), cityLabel(c), selected == c, () => onSelected(c)),
+        ].expand((w) => [w, const SizedBox(width: 8)]).toList()),
+      ),
+    );
+  }
+}
+
+/// The School tab: every venue's kids' school with a sign-up button, plus
+/// the player's own registrations.
+class SchoolsScreen extends StatelessWidget {
+  const SchoolsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final schools = venues.where((v) => v['hasTraining'] == true).toList();
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: PlayerAppBar(title: tr('בית ספר לילדים', 'KIDS SCHOOL')),
+      body: ListView(padding: const EdgeInsets.all(spaceMd), children: [
+        Text(tr('בחר בית ספר והירשם לקבוצת אימון', 'Pick a school and join a training group'),
+          style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: spaceMd),
+        if (schools.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: spaceXl),
+            child: Column(children: [
+              Icon(Icons.school_outlined, color: textSecondary, size: 56),
+              const SizedBox(height: 12),
+              Text(tr('אין כרגע בתי ספר להרשמה', 'No schools open for sign-up right now'),
+                textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 15)),
+            ]),
+          ),
+        for (final v in schools)
+          Padding(padding: const EdgeInsets.only(bottom: spaceSm), child: _SchoolSignupCard(venue: v)),
+        const SizedBox(height: spaceMd),
+        Semantics(
+          identifier: 'school_my_registrations',
+          button: true,
+          container: true,
+          child: OutlinedButton.icon(
+            onPressed: () => navigateTo(context, const MyTrainingRegistrationsScreen()),
+            icon: Icon(Icons.assignment_turned_in_outlined, color: colorInfo, size: 18),
+            label: Text(tr('הרישומים שלי', 'My registrations'),
+              style: TextStyle(color: colorInfo, fontWeight: FontWeight.w800, fontSize: 14)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: BorderSide(color: colorInfo.withValues(alpha: 0.5)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+            ),
+          ),
+        ),
       ]),
+    );
+  }
+}
+
+/// Home-screen card that opens a venue's kids' school groups for sign-up.
+/// Semantics identifier `school_signup_{venueId}` for E2E.
+class _SchoolSignupCard extends StatelessWidget {
+  final Map<String, dynamic> venue;
+  const _SchoolSignupCard({required this.venue});
+
+  @override
+  Widget build(BuildContext context) {
+    final id = venue['id'] as String;
+    final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
+    void open() => navigateTo(context, TrainingGroupsListScreen(venueId: id, venueName: name));
+    return Semantics(
+      identifier: 'school_signup_$id',
+      container: true,
+      child: Material(
+        color: colorInfo.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(radiusXl),
+        child: InkWell(
+          onTap: open,
+          borderRadius: BorderRadius.circular(radiusXl),
+          child: Container(
+            padding: const EdgeInsets.all(spaceSm),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(radiusXl),
+              border: Border.all(color: colorInfo.withValues(alpha: 0.35)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 48, height: 48,
+                decoration: BoxDecoration(color: colorInfo.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(radiusLg)),
+                child: Icon(Icons.school_rounded, color: colorInfo, size: 26),
+              ),
+              const SizedBox(width: spaceSm),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 2),
+                  Text(tr('בית ספר וקבוצות אימון לילדים', 'Kids school & training groups'), maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              const SizedBox(width: spaceXs),
+              ElevatedButton(
+                onPressed: open,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colorInfo,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                ),
+                child: Text(tr('הרשמה', 'Sign up'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
+              ),
+            ]),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -5983,895 +6201,111 @@ class _VenueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stadiumCount = (venue['stadiumIds'] as List? ?? const []).length;
+    final id = venue['id'] as String;
+    final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
     final hasTraining = venue['hasTraining'] == true;
     final emoji = venue['emoji'] as String? ?? '🏟️';
     final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
-    final region = isHebrew ? (venue['region'] as String? ?? 'נצרת') : (venue['regionEn'] as String? ?? 'Nazareth');
-    final description = isHebrew ? (venue['description'] as String? ?? '') : (venue['descriptionEn'] as String? ?? venue['description'] as String? ?? '');
+    final city = cityLabel(venueCityKey(venue));
+    final sports = sportsOfVenue(venue);
+    final sport = venueSport(venue);
+    final courtsText = sports.length > 1
+        ? '${ids.length} ${tr('מגרשים', 'courts')} · ${sports.map(sportLabel).join(' / ')}'
+        : '${ids.length} ${courtWord(sport, 'מגרשים', 'fields', plural: true)}';
 
-    final card = InkWell(
-      onTap: onTap,
+    final thumb = StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('venue_config').doc(id).snapshots(),
+      builder: (ctx, snap) {
+        final bg = snap.hasData && snap.data!.exists ? (snap.data!.data()?['backgroundImage'] as String?) : null;
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(radiusLg),
+          child: Container(
+            width: 64, height: 64,
+            color: accentGreen.withValues(alpha: 0.12),
+            alignment: Alignment.center,
+            child: bg != null && bg.isNotEmpty
+                ? Image.network(bg, width: 64, height: 64, fit: BoxFit.cover, cacheWidth: 192,
+                    errorBuilder: (_, __, ___) => Text(emoji, style: const TextStyle(fontSize: 30)))
+                : Text(emoji, style: const TextStyle(fontSize: 30)),
+          ),
+        );
+      },
+    );
+
+    final card = Material(
+      color: cardColor,
       borderRadius: BorderRadius.circular(radiusXl),
-      child: ClipRRect(
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(radiusXl),
         child: Container(
+          padding: const EdgeInsets.all(spaceSm),
           decoration: BoxDecoration(
-            color: cardColor,
             borderRadius: BorderRadius.circular(radiusXl),
             border: Border.all(color: borderColor),
           ),
-          // Listen to venue_config/{venueId}.backgroundImage. When present,
-          // show full-card image with overlay + bottom-aligned content.
-          // When absent, fall back to the original split layout (green header + body).
-          child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('venue_config')
-                .doc(venue['id'] as String)
-                .snapshots(),
-            builder: (ctx, snap) {
-              final bg = snap.hasData && snap.data!.exists
-                  ? (snap.data!.data()?['backgroundImage'] as String?)
-                  : null;
-              final hasImage = bg != null && bg.isNotEmpty;
-              return hasImage
-                  ? _imageLayout(bg, name, description, region, stadiumCount, hasTraining, emoji)
-                  : _defaultLayout(name, description, region, stadiumCount, hasTraining, emoji);
-            },
-          ),
-        ),
-      ),
-    );
-    return identifier == null
-        ? card
-        : Semantics(identifier: identifier, container: true, child: card);
-  }
-
-  /// Layout used when the venue has a custom background image — image covers
-  /// the whole card, content sits at the bottom over a darker gradient.
-  Widget _imageLayout(
-    String bg,
-    String name,
-    String description,
-    String region,
-    int stadiumCount,
-    bool hasTraining,
-    String emoji,
-  ) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 290),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1) Image (lowest layer)
-          _buildVenueBackground(bg),
-          // 2) Top-to-bottom dark gradient for text readability
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: 0.30),
-                  Colors.black.withValues(alpha: 0.75),
-                ],
-              ),
-            ),
-          ),
-          // 3) Decorative emoji top-right (reduced opacity, doesn't compete)
-          Positioned(
-            top: 12,
-            right: isHebrew ? null : 12,
-            left: isHebrew ? 12 : null,
-            child: Opacity(
-              opacity: 0.45,
-              child: Text(emoji, style: const TextStyle(fontSize: 40)),
-            ),
-          ),
-          // 4) Forward-arrow CTA top-leading corner
-          Positioned(
-            top: 12,
-            right: isHebrew ? 12 : null,
-            left: isHebrew ? null : 12,
-            child: Container(
-              width: 32, height: 32,
-              decoration: BoxDecoration(
-                color: accentGreen,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                Icons.arrow_forward,
-                color: bgColor,
-                size: 18,
-              ),
-            ),
-          ),
-          // 5) Content stack at the bottom
-          Positioned(
-            left: 0, right: 0, bottom: 0,
-            child: Padding(
-              padding: const EdgeInsets.all(spaceMd),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1,
-                      shadows: [
-                        Shadow(color: Colors.black.withValues(alpha: 0.6), blurRadius: 4),
-                      ],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (description.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      description,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  const SizedBox(height: spaceSm),
-                  Row(children: [
-                    _metaItemOnImage(Icons.location_on_outlined, region),
-                    const SizedBox(width: spaceMd),
-                    _metaItemOnImage(sportIcon(venueSport(venue)), '$stadiumCount ${courtWord(venueSport(venue), "מגרשים", "fields", plural: true)}'),
-                  ]),
-                  const SizedBox(height: spaceSm),
-                  Container(height: 1, color: Colors.white.withValues(alpha: 0.2)),
-                  const SizedBox(height: spaceSm),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      _featureBadge(Icons.calendar_month, tr('הזמנות', 'Booking'), accentGreen),
-                      if (hasTraining)
-                        _featureBadge(Icons.school_outlined, tr('אימונים', 'Training'), const Color(0xFF3B82F6)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Original split layout (green gradient header + dark body) — used when
-  /// the venue admin hasn't configured a background image.
-  Widget _defaultLayout(
-    String name,
-    String description,
-    String region,
-    int stadiumCount,
-    bool hasTraining,
-    String emoji,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: 110,
-          width: double.infinity,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              _defaultVenueGradient(),
-              Positioned(
-                top: -20, right: -20,
-                child: Container(
-                  width: 120, height: 120,
-                  decoration: BoxDecoration(
-                    color: accentGreen.withValues(alpha: 0.06),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              Positioned(
-                bottom: -30, left: -10,
-                child: Container(
-                  width: 80, height: 80,
-                  decoration: BoxDecoration(
-                    color: accentGreen.withValues(alpha: 0.04),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              Center(
-                child: Text(
-                  emoji,
-                  style: const TextStyle(fontSize: 56),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(spaceMd),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(children: [
-                Expanded(
-                  child: Text(
-                    name,
-                    style: TextStyle(
-                      color: textPrimary,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Container(
-                  width: 32, height: 32,
-                  decoration: BoxDecoration(
-                    color: accentGreen,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.arrow_forward,
-                    color: bgColor,
-                    size: 18,
-                  ),
-                ),
-              ]),
-              if (description.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  description,
-                  style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w500),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              const SizedBox(height: spaceSm),
-              Row(children: [
-                _metaItem(Icons.location_on_outlined, region),
-                const SizedBox(width: spaceMd),
-                _metaItem(sportIcon(venueSport(venue)), '$stadiumCount ${courtWord(venueSport(venue), "מגרשים", "fields", plural: true)}'),
-              ]),
-              const SizedBox(height: spaceSm),
-              Container(height: 1, color: borderColor),
-              const SizedBox(height: spaceSm),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  _featureBadge(Icons.calendar_month, tr('הזמנות', 'Booking'), accentGreen),
-                  if (hasTraining)
-                    _featureBadge(Icons.school_outlined, tr('אימונים', 'Training'), const Color(0xFF3B82F6)),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Meta-row item recolored for white-on-image readability.
-  Widget _metaItemOnImage(IconData icon, String label) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(icon, color: Colors.white.withValues(alpha: 0.8), size: 14),
-      const SizedBox(width: 4),
-      Text(
-        label,
-        style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.8),
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    ]);
-  }
-
-  /// Renders a venue background image. Supports both base64 data URLs
-  /// (stored in Firestore on the free tier) and legacy https:// URLs from
-  /// Firebase Storage (Blaze plan only). Falls back to gradient on error.
-  Widget _buildVenueBackground(String src) {
-    if (src.startsWith('data:image')) {
-      try {
-        final base64Part = src.split(',').last;
-        final bytes = base64Decode(base64Part);
-        return Image.memory(
-          bytes,
-          fit: BoxFit.cover,
-          cacheHeight: 220, cacheWidth: 800,
-          errorBuilder: (_, __, ___) => _defaultVenueGradient(),
-        );
-      } catch (_) {
-        return _defaultVenueGradient();
-      }
-    }
-    return Image.network(
-      src,
-      fit: BoxFit.cover,
-      cacheHeight: 220, cacheWidth: 800,
-      loadingBuilder: (_, child, p) => p == null
-          ? child
-          : Container(
-              color: cardColor,
-              child: Center(
-                child: CircularProgressIndicator(color: accentGreen, strokeWidth: 2),
-              ),
-            ),
-      errorBuilder: (_, __, ___) => _defaultVenueGradient(),
-    );
-  }
-
-  /// Fallback gradient used when no custom venue background is configured
-  /// (or when the configured image fails to load).
-  Widget _defaultVenueGradient() {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            accentGreen.withValues(alpha: 0.25),
-            accentGreen.withValues(alpha: 0.05),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-    );
-  }
-
-  Widget _metaItem(IconData icon, String label) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Icon(icon, color: textSecondary, size: 14),
-      const SizedBox(width: 4),
-      Text(label, style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-    ]);
-  }
-
-  Widget _featureBadge(IconData icon, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(radiusXs),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, color: color, size: 11),
-        const SizedBox(width: 4),
-        Text(
-          label,
-          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700),
-        ),
-      ]),
-    );
-  }
-}
-
-// ==================== VENUE HOME ====================
-class VenueHomeScreen extends StatefulWidget {
-  final Map<String, dynamic> venue;
-  const VenueHomeScreen({super.key, required this.venue});
-
-  @override
-  State<VenueHomeScreen> createState() => _VenueHomeScreenState();
-}
-
-class _VenueHomeScreenState extends State<VenueHomeScreen> {
-  @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 700;
-    final isTablet = width >= 700 && width < 1100;
-    final crossAxisCount = isMobile ? 1 : (isTablet ? 2 : 3);
-
-    final venue = widget.venue;
-    final hasTraining = venue['hasTraining'] == true;
-    final stadiumIds = (venue['stadiumIds'] as List? ?? const []).cast<String>();
-    final stadiums = allStadiums.where((s) => stadiumIds.contains(s['id'] as String)).toList();
-    final sport = venueSport(venue);
-    final emoji = venue['emoji'] as String? ?? '🏟️';
-    final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
-    final region = isHebrew ? (venue['region'] as String? ?? 'נצרת') : (venue['regionEn'] as String? ?? 'Nazareth');
-
-    final actions = <Map<String, dynamic>>[
-      {
-        'id': 'venue_action_book_a_field',
-        'icon': Icons.calendar_month_rounded,
-        'title': isRacketSport(sport)
-            ? tr('הזמן ${courtWord(sport, '', '')}', 'Book a Court')
-            : tr('הזמן מגרש', 'Book a Field'),
-        'subtitle': tr('בחר תאריך ושעה', 'Pick date & time'),
-        'color': accentGreen,
-        'onTap': () {
-          if (stadiums.length == 1) {
-            navigateTo(context, BookingScreen(stadium: stadiums.first),);
-          } else {
-            navigateTo(context, StadiumSelectionScreen(venue: venue),);
-          }
-        },
-      },
-      if (hasTraining)
-        {
-          'icon': Icons.school_rounded,
-          'title': tr('הירשם לאימונים', 'Join Training'),
-          'subtitle': tr('קבוצות אימון לילדים', 'Kids training groups'),
-          'color': const Color(0xFF3B82F6),
-          'onTap': () {
-            navigateTo(context, TrainingGroupsListScreen(venueId: venue['id'] as String, venueName: name),);
-          },
-        },
-    ];
-
-    return Scaffold(
-      backgroundColor: bgColor,
-      appBar: PlayerAppBar(title: name),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // BODY
-            Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isMobile ? spaceMd : spaceXl,
-                  vertical: spaceMd,
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1400),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // VENUE BANNER
-                        Container(
-                          width: double.infinity,
-                          padding: EdgeInsets.all(isMobile ? spaceLg : spaceXl),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                accentGreen.withValues(alpha: 0.25),
-                                accentGreen.withValues(alpha: 0.05),
-                              ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(radiusXl),
-                            border: Border.all(color: accentGreen.withValues(alpha: 0.2)),
-                          ),
-                          child: Stack(
-                            children: [
-                              Positioned(
-                                top: -30, right: -30,
-                                child: Container(
-                                  width: 140, height: 140,
-                                  decoration: BoxDecoration(
-                                    color: accentGreen.withValues(alpha: 0.06),
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                              ),
-                              Row(children: [
-                                Container(
-                                  width: isMobile ? 60 : 80,
-                                  height: isMobile ? 60 : 80,
-                                  decoration: BoxDecoration(
-                                    color: bgColor.withValues(alpha: 0.4),
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  child: Center(
-                                    child: Text(emoji, style: TextStyle(fontSize: isMobile ? 36 : 48)),
-                                  ),
-                                ),
-                                SizedBox(width: isMobile ? spaceMd : spaceLg),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        tr('ברוך הבא ל-', 'Welcome to'),
-                                        style: TextStyle(
-                                          color: accentGreen,
-                                          fontSize: isMobile ? 12 : 13,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: isHebrew ? 0 : 1,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        name,
-                                        style: TextStyle(
-                                          color: textPrimary,
-                                          fontSize: isMobile ? 22 : 28,
-                                          fontWeight: FontWeight.w900,
-                                          letterSpacing: 1.5,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(children: [
-                                        Icon(Icons.location_on, color: textSecondary, size: 13),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          region,
-                                          style: TextStyle(
-                                            color: textSecondary,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(width: spaceSm),
-                                        Icon(sportIcon(sport), color: textSecondary, size: 13),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          '${stadiums.length} ${courtWord(sport, "מגרשים", "fields", plural: true)}',
-                                          style: TextStyle(
-                                            color: textSecondary,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ]),
-                                    ],
-                                  ),
-                                ),
-                              ]),
-                            ],
-                          ),
-                        ),
-
-                        const SizedBox(height: spaceLg),
-                        appSectionTitle(tr('מה תרצה לעשות?', 'WHAT WOULD YOU LIKE TO DO?')),
-                        const SizedBox(height: spaceXs),
-
-                        // ACTION CARDS GRID
-                        GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: crossAxisCount,
-                            mainAxisSpacing: spaceMd,
-                            crossAxisSpacing: spaceMd,
-                            childAspectRatio: isMobile ? 2.5 : 1.1,
-                          ),
-                          itemCount: actions.length,
-                          itemBuilder: (ctx, i) {
-                            final action = actions[i];
-                            return _ActionCard(
-                              icon: action['icon'] as IconData,
-                              title: action['title'] as String,
-                              subtitle: action['subtitle'] as String,
-                              color: action['color'] as Color,
-                              onTap: action['onTap'] as VoidCallback,
-                              isMobile: isMobile,
-                              identifier: action['id'] as String?,
-                            );
-                          },
-                        ),
-
-                        const SizedBox(height: spaceLg),
-
-                        // MY BOOKINGS LINK
-                        appSectionTitle(tr('האזור האישי שלי', 'MY ACCOUNT')),
-                        const SizedBox(height: spaceXs),
-                        appListTile(
-                          icon: Icons.person_rounded,
-                          title: tr('הפרטים שלי', 'My Details'),
-                          subtitle: tr('שם, אימייל, טלפון, עיר', 'Name, email, phone, city'),
-                          iconColor: accentOrange,
-                          trailing: Icon(
-                            Icons.arrow_forward_ios,
-                            color: textSecondary, size: 14,
-                          ),
-                          onTap: () {
-                            navigateTo(context, const ProfileScreen(),);
-                          },
-                        ),
-                        const SizedBox(height: spaceSm),
-                        appListTile(
-                          icon: Icons.calendar_month_rounded,
-                          title: tr('ההזמנות שלי', 'My Bookings'),
-                          subtitle: tr('הזמנות עתידיות, היסטוריה וביטול', 'Upcoming, history & cancel'),
-                          iconColor: accentGreen,
-                          trailing: Icon(
-                            Icons.arrow_forward_ios,
-                            color: textSecondary, size: 14,
-                          ),
-                          onTap: () {
-                            navigateTo(context, const MyBookingsScreen(),);
-                          },
-                        ),
-
-                        // MY REGISTRATIONS LINK (if has training)
-                        if (hasTraining) ...[
-                          const SizedBox(height: spaceSm),
-                          appListTile(
-                            icon: Icons.list_alt_rounded,
-                            title: tr('הרישומים לאימונים שלי', 'My training registrations'),
-                            subtitle: tr('סטטוס תשלום, פרטי הקבוצה', 'Payment status, group details'),
-                            iconColor: const Color(0xFF3B82F6),
-                            trailing: Icon(
-                              Icons.arrow_forward_ios,
-                              color: textSecondary, size: 14,
-                            ),
-                            onTap: () {
-                              navigateTo(context, const MyTrainingRegistrationsScreen(),);
-                            },
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ActionCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Color color;
-  final VoidCallback onTap;
-  final bool isMobile;
-  final String? identifier;
-
-  const _ActionCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.color,
-    required this.onTap,
-    required this.isMobile,
-    this.identifier,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final card = InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(radiusXl),
-      child: Container(
-        padding: EdgeInsets.all(isMobile ? spaceMd : spaceLg),
-        decoration: BoxDecoration(
-          color: cardColor,
-          borderRadius: BorderRadius.circular(radiusXl),
-          border: Border.all(color: borderColor),
-        ),
-        child: isMobile
-            ? Row(
-                children: [
-                  Container(
-                    width: 48, height: 48,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(icon, color: color, size: 24),
-                  ),
-                  const SizedBox(width: spaceMd),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            color: textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            color: textSecondary,
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.arrow_forward_ios,
-                    color: textSecondary, size: 14,
-                  ),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 56, height: 56,
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(icon, color: color, size: 28),
-                  ),
-                  const Spacer(),
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              thumb,
+              const SizedBox(width: spaceSm),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: spaceSm),
                   Row(children: [
-                    Text(
-                      tr('המשך', 'Continue'),
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: isHebrew ? 0 : 1,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.arrow_forward,
-                      color: color, size: 14,
-                    ),
+                    Icon(Icons.location_on_outlined, size: 14, color: textSecondary),
+                    const SizedBox(width: 2),
+                    Flexible(child: Text(city, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
                   ]),
-                ],
+                  const SizedBox(height: 2),
+                  Row(children: [
+                    Icon(sportIcon(sport), size: 14, color: textSecondary),
+                    const SizedBox(width: 2),
+                    Flexible(child: Text(courtsText, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
+                  ]),
+                ]),
               ),
-      ),
-    );
-    return identifier == null
-        ? card
-        : Semantics(identifier: identifier, container: true, child: card);
-  }
-}
-
-// ==================== VENUE STADIUMS ====================
-class StadiumSelectionScreen extends StatelessWidget {
-  final Map<String, dynamic> venue;
-  const StadiumSelectionScreen({super.key, required this.venue});
-
-  @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final isMobile = width < 700;
-    final isTablet = width >= 700 && width < 1100;
-    final crossAxisCount = isMobile ? 1 : (isTablet ? 2 : 3);
-    final vName = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
-    final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
-    final stadiums = allStadiums.where((s) => ids.contains(s['id'] as String)).toList();
-
-    return Scaffold(
-      backgroundColor: bgColor,
-      appBar: PlayerAppBar(title: '${isRacketSport(venueSport(venue)) ? tr('בחר ${courtWord(venueSport(venue), '', '')}', 'Choose a Court') : tr('בחר מגרש', 'Choose a Field')} — $vName'),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // BODY
-            Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(
-                  horizontal: isMobile ? spaceMd : spaceXl,
-                  vertical: spaceMd,
+              const SizedBox(width: spaceXs),
+              Semantics(
+                identifier: 'venue_book_$id',
+                button: true,
+                container: true,
+                child: ElevatedButton(
+                  onPressed: onTap,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: accentGreen,
+                    foregroundColor: bgColor,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                  ),
+                  child: Text(tr('הזמן', 'Book'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
                 ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1400),
-                    child: GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        mainAxisSpacing: spaceMd,
-                        crossAxisSpacing: spaceMd,
-                        childAspectRatio: isMobile ? 2.2 : 1.4,
-                        mainAxisExtent: isMobile ? 190 : null,
-                      ),
-                      itemCount: stadiums.length,
-                      itemBuilder: (ctx, i) {
-                        final s = stadiums[i];
-                        return Semantics(
-                          identifier: 'stadium_card_${s['id']}',
-                          container: true,
-                          child: InkWell(
-                          onTap: () {
-                            navigateTo(context, BookingScreen(stadium: s),);
-                          },
-                          borderRadius: BorderRadius.circular(radiusXl),
-                          child: Container(
-                            padding: const EdgeInsets.all(spaceLg),
-                            decoration: BoxDecoration(
-                              color: cardColor,
-                              borderRadius: BorderRadius.circular(radiusXl),
-                              border: Border.all(color: borderColor),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  width: 56, height: 56,
-                                  decoration: BoxDecoration(
-                                    color: accentGreen.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: Icon(sportIcon(sportOf(s)), color: accentGreen, size: 28),
-                                ),
-                                const SizedBox(height: spaceMd),
-                                Text(
-                                  s['name'] as String,
-                                  style: TextStyle(
-                                    color: textPrimary,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: isHebrew ? 0 : 0.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '₪${s['price']} ${isHebrew ? "להזמנה" : "per booking"}',
-                                  style: TextStyle(
-                                    color: textSecondary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: spaceSm),
-                                Row(children: [
-                                  Text(
-                                    tr('בחר', 'Select'),
-                                    style: TextStyle(
-                                      color: accentGreen,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: isHebrew ? 0 : 1,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Icon(
-                                    Icons.arrow_forward,
-                                    color: accentGreen, size: 14,
-                                  ),
-                                ]),
-                              ],
-                            ),
-                          ),
-                          ),
-                        );
-                      },
-                    ),
+              ),
+            ]),
+            if (hasTraining)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Semantics(
+                  identifier: 'venue_training_$id',
+                  button: true,
+                  container: true,
+                  child: TextButton.icon(
+                    onPressed: () => navigateTo(context, TrainingGroupsListScreen(venueId: id, venueName: name)),
+                    icon: Icon(Icons.school_outlined, size: 16, color: colorInfo),
+                    label: Text(tr('אימונים לילדים', 'Kids training'), style: TextStyle(color: colorInfo, fontSize: 12, fontWeight: FontWeight.w800)),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(0, 32)),
                   ),
                 ),
               ),
-            ),
-          ],
+          ]),
         ),
       ),
     );
+    return identifier == null ? card : Semantics(identifier: identifier, container: true, child: card);
   }
 }
 
@@ -6945,7 +6379,10 @@ class StadiumCard extends StatelessWidget {
 // ==================== BOOKING SCREEN ====================
 class BookingScreen extends StatefulWidget {
   final Map<String, dynamic> stadium;
-  const BookingScreen({super.key, required this.stadium});
+  /// All courts of the venue, for switching without going back.
+  final List<Map<String, dynamic>>? courts;
+  final int initialDay;
+  const BookingScreen({super.key, required this.stadium, this.courts, this.initialDay = 0});
   @override State<BookingScreen> createState() => _BookingScreenState();
 }
 class _BookingScreenState extends State<BookingScreen> {
@@ -6974,7 +6411,49 @@ class _BookingScreenState extends State<BookingScreen> {
   List<Map<String, dynamic>> _trainingGroups = [];
   List<Map<String, dynamic>> _recurringBlocks = [];
 
-  @override void initState() { super.initState(); _buildDays(); _loadData(); }
+  @override void initState() { super.initState(); _selDay = widget.initialDay; _buildDays(); _loadData(); }
+
+  void _switchCourt(Map<String, dynamic> court) {
+    if (court['id'] == widget.stadium['id']) return;
+    Navigator.of(context).pushReplacement(PageRouteBuilder(
+      transitionDuration: Duration.zero,
+      pageBuilder: (_, __, ___) => BookingScreen(stadium: court, courts: widget.courts, initialDay: _selDay),
+    ));
+  }
+
+  Widget _courtPicker() {
+    final courts = widget.courts!;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      appSectionTitle(isRacketSport(_sport) ? tr('בחר ${courtWord(_sport, '', '')}', 'Choose a court') : tr('בחר מגרש', 'Choose a field')),
+      const SizedBox(height: spaceXs),
+      SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final c in courts) Padding(
+            padding: const EdgeInsetsDirectional.only(end: 8),
+            child: Semantics(
+              identifier: 'stadium_card_${c['id']}',
+              button: true,
+              selected: c['id'] == widget.stadium['id'],
+              container: true,
+              child: ChoiceChip(
+                selected: c['id'] == widget.stadium['id'],
+                onSelected: (_) => _switchCourt(c),
+                showCheckmark: false,
+                avatar: Icon(sportIcon(sportOf(c)), size: 16, color: c['id'] == widget.stadium['id'] ? bgColor : accentGreen),
+                label: Text(c['name'] as String),
+                labelStyle: TextStyle(color: c['id'] == widget.stadium['id'] ? bgColor : textPrimary, fontWeight: FontWeight.w800, fontSize: 13),
+                selectedColor: accentGreen,
+                backgroundColor: cardColor,
+                side: BorderSide(color: c['id'] == widget.stadium['id'] ? accentGreen : borderColor),
+              ),
+            ),
+          ),
+        ]),
+      ),
+      const SizedBox(height: spaceMd),
+    ]);
+  }
 
   void _buildDays() {
     final now = DateTime.now();
@@ -7421,6 +6900,7 @@ class _BookingScreenState extends State<BookingScreen> {
                         // soon as this screen builds, before the async
                         // Firestore load finishes — a reliable "arrived"
                         // signal for E2E tests that doesn't wait on data.
+                        if ((widget.courts?.length ?? 0) > 1) _courtPicker(),
                         appSectionTitle(tr('בחר תאריך', 'SELECT DATE'), identifier: 'booking_screen'),
                         const SizedBox(height: spaceXs),
                         SizedBox(
@@ -8017,7 +7497,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
       Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
         child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.person_outline, color: accentGreen, size: 16), const SizedBox(width: 6), Text('${tr('מצטרף כ','Joining as')}: $_myName', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13))])),
       const SizedBox(height: 28),
-      Text(tr('הכנס קוד הזמנה','ENTER BOOKING CODE'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 3)), const SizedBox(height: 12),
+      Text(tr('הכנס את הקוד שקיבלת מחבר','ENTER THE CODE A FRIEND SENT YOU'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 3)), const SizedBox(height: 12),
       TextField(controller: _ctrl, textAlign: TextAlign.center, style: TextStyle(color: accentGreen, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 12), keyboardType: TextInputType.number, maxLength: 4,
         decoration: InputDecoration(hintText: '0000', hintStyle: TextStyle(color: mutedIcon, fontSize: 32, letterSpacing: 12), filled: true, fillColor: cardColor, counterText: '',
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: borderColor)),
@@ -8225,8 +7705,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   if (changed == true && mounted) setState(_refresh);
                 }),
                 const SizedBox(height: 10),
-                _menuItem(Icons.calendar_month_outlined, tr('הלוח זמנים שלי', 'My Schedule'), accentGreen,
-                    () => navigateTo(context, const MyBookingsScreen())),
+                _menuItem(Icons.calendar_month_outlined, tr('ההזמנות שלי', 'My Bookings'), accentGreen,
+                    () => openPlayerTab(context, 1)),
+                if (venues.any((v) => v['hasTraining'] == true)) ...[
+                  const SizedBox(height: 10),
+                  _menuItem(Icons.school_outlined, tr('הרישומים שלי לאימונים', 'My training registrations'), colorInfo,
+                      () => navigateTo(context, const MyTrainingRegistrationsScreen())),
+                ],
                 const SizedBox(height: 10),
                 _menuItem(Icons.contact_support_outlined, tr('צור קשר', 'Contact Us'), accentAmber,
                     () => navigateTo(context, const ContactScreen())),
@@ -8576,7 +8061,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
     final myName = user?.displayName ?? user?.email ?? '';
     return Scaffold(backgroundColor: bgColor,
       appBar: PlayerAppBar(
-        title: tr('הלוח זמנים שלי','MY SCHEDULE'),
+        title: tr('ההזמנות שלי','MY BOOKINGS'),
         bottom: TabBar(
           controller: _tab,
           indicatorColor: accentGreen,
@@ -10699,19 +10184,6 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
           offset: const Offset(0, 48),
           itemBuilder: (ctx) => [
             PopupMenuItem<String>(
-              value: 'profile',
-              child: _menuRow(Icons.person_outline, tr('הפרופיל שלי', 'My Profile'), accentGreen),
-            ),
-            PopupMenuItem<String>(
-              value: 'bookings',
-              child: _menuRow(Icons.calendar_month_outlined, tr('ההזמנות שלי', 'My Bookings'), accentGreen),
-            ),
-            PopupMenuItem<String>(
-              value: 'join',
-              child: _menuRow(Icons.qr_code_2_rounded, tr('הצטרפות עם קוד', 'Join with a code'), accentGreen),
-            ),
-            const PopupMenuDivider(),
-            PopupMenuItem<String>(
               value: 'contact',
               child: _menuRow(Icons.contact_support_outlined, tr('צור קשר', 'Contact'), accentAmber),
             ),
@@ -10731,15 +10203,6 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
           ],
           onSelected: (value) async {
             switch (value) {
-              case 'profile':
-                navigateTo(context, const ProfileScreen(),);
-                break;
-              case 'bookings':
-                navigateTo(context, const MyBookingsScreen(),);
-                break;
-              case 'join':
-                navigateTo(context, const JoinByCodeScreen());
-                break;
               case 'contact':
                 navigateTo(context, const ContactScreen());
                 break;
