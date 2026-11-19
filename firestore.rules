@@ -11,6 +11,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // A real account, not a guest. Guests are signed in anonymously so they
+    // can look at courts and times, but cannot book, join or register.
+    function isMember() {
+      return isSignedIn()
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     // Owner of the whole app. Must match kOwnerEmail in lib/main.dart. Requires
     // a verified email, so registering with this address grants nothing.
     function isOwner() {
@@ -40,9 +47,9 @@ service cloud.firestore {
     // 1) USERS - each user reads/writes only their own profile.
     match /users/{uid} {
       allow read:   if isSignedIn() && request.auth.uid == uid;
-      allow create: if isSignedIn() && request.auth.uid == uid;
-      allow update: if isSignedIn() && request.auth.uid == uid;
-      allow delete: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isMember() && request.auth.uid == uid;
+      allow update: if isMember() && request.auth.uid == uid;
+      allow delete: if isMember() && request.auth.uid == uid;
     }
 
     // Padel/tennis bookings carry `maxPlayers`; football bookings don't, so
@@ -59,14 +66,14 @@ service cloud.firestore {
     // 2) BOOKINGS - signed-in users see availability and join with codes.
     match /bookings/{bookingId} {
       allow read:   if isSignedIn();
-      allow create: if isSignedIn() && withinMaxPlayers();
-      allow update: if isSignedIn() && (
+      allow create: if isMember() && withinMaxPlayers();
+      allow update: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
         || managesStadium(resource.data.get('stadiumId', ''))
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
       ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()));
-      allow delete: if isSignedIn() && (
+      allow delete: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
         || managesStadium(resource.data.get('stadiumId', ''))
@@ -100,9 +107,9 @@ service cloud.firestore {
     // 4) NOTIFICATIONS - each user reads/writes only their own.
     match /notifications/{notifId} {
       allow read:   if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isMember();
+      allow update: if isMember() && resource.data.userId == request.auth.uid;
+      allow delete: if isMember() && resource.data.userId == request.auth.uid;
     }
 
     // 5) RECURRING_BLOCKS - weekly fixed reservations.
@@ -133,12 +140,12 @@ service cloud.firestore {
       allow read:   if isSignedIn() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
       );
-      allow create: if isSignedIn()
+      allow create: if isMember()
         && request.resource.data.parentUserId == request.auth.uid;
-      allow update: if isSignedIn() && (
+      allow update: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
       );
-      allow delete: if isSignedIn() && (
+      allow delete: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
       );
     }

@@ -317,6 +317,7 @@ Map<String, dynamic> plainCourtType(Map<String, dynamic>? stadium) {
 /// The owner and court admins need a verified email (firestore.rules requires
 /// it too); until then they get the normal player home with its verify banner.
 Future<Widget> homeScreenForUser(User user) async {
+  if (user.isAnonymous) return const PlayerShell();
   final email = user.email ?? '';
   if (email == superAdminEmail) return const SuperAdminScreen();
   if (email == md9AdminEmail) return const MD9AdminScreen();
@@ -423,10 +424,14 @@ class _PlayerShellState extends State<PlayerShell> {
         backgroundColor: bgColor,
         body: IndexedStack(index: _tab, children: [
           const VenueSelectionScreen(),
-          _tab == 1 ? MyBookingsScreen(key: ValueKey('bookings$_visit')) : const SizedBox.shrink(),
+          _tab != 1 ? const SizedBox.shrink()
+            : isGuestUser ? GuestGate(title: tr('ההזמנות שלי', 'MY BOOKINGS'), message: tr('התחבר כדי לראות את ההזמנות שלך', 'Sign in to see your bookings'))
+            : MyBookingsScreen(key: ValueKey('bookings$_visit')),
           _tab == 2 ? SchoolsScreen(key: ValueKey('school$_visit')) : const SizedBox.shrink(),
           _tab == 3 ? JoinByCodeScreen(key: ValueKey('join$_visit')) : const SizedBox.shrink(),
-          _tab == 4 ? ProfileScreen(key: ValueKey('profile$_visit')) : const SizedBox.shrink(),
+          _tab != 4 ? const SizedBox.shrink()
+            : isGuestUser ? GuestGate(title: tr('פרופיל', 'PROFILE'), message: tr('התחבר כדי לראות ולערוך את הפרטים שלך', 'Sign in to see and edit your details'))
+            : ProfileScreen(key: ValueKey('profile$_visit')),
         ]),
         bottomNavigationBar: Container(
           decoration: BoxDecoration(
@@ -913,6 +918,164 @@ Future<void> _signOut([BuildContext? context]) async {
       (route) => false,
     );
   }
+}
+
+/// Guests are signed in anonymously so they can look at courts, times and
+/// schools; firestore.rules blocks every write from them.
+bool get isGuestUser {
+  final u = FirebaseAuth.instance.currentUser;
+  return u == null || u.isAnonymous;
+}
+
+/// "Continue as guest" on the login screen.
+Future<void> continueAsGuest(BuildContext context) async {
+  try {
+    if (FirebaseAuth.instance.currentUser == null) {
+      await FirebaseAuth.instance.signInAnonymously();
+    }
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('אי אפשר להיכנס כאורח כרגע, נסה שוב', "Couldn't continue as guest, please try again")),
+        backgroundColor: colorError,
+      ));
+    }
+    return;
+  }
+  if (!context.mounted) return;
+  final nav = Navigator.of(context);
+  nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const PlayerShell()), (route) => false);
+  openPendingJoin(nav);
+}
+
+/// Runs before booking, joining a game or signing up for a school. Guests
+/// are asked to sign in; accounts with no phone number (e.g. from Google)
+/// are asked to add one. True when the action may go ahead.
+Future<bool> requireAccount(BuildContext context) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null || user.isAnonymous) {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardColor,
+        title: Text(tr('צריך חשבון', 'Account needed'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+        content: Text(
+          tr('כדי להזמין מגרש, להצטרף למשחק או להירשם לבית ספר צריך להתחבר עם שם ומספר טלפון.',
+             'To book a court, join a game or sign up for a school, please sign in with your name and phone number.'),
+          style: TextStyle(color: textSecondary, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(tr('לא עכשיו', 'Not now'), style: TextStyle(color: textSecondary)),
+          ),
+          TextButton(
+            onPressed: () { Navigator.pop(ctx); navigateTo(context, const RegisterScreen()); },
+            child: Text(tr('הרשמה', 'Register'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+          ),
+          Semantics(
+            identifier: 'guest_gate_sign_in',
+            button: true,
+            container: true,
+            child: ElevatedButton(
+              onPressed: () { Navigator.pop(ctx); navigateTo(context, const LoginScreen()); },
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, elevation: 0),
+              child: Text(tr('כניסה', 'Sign in'), style: const TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
+      ),
+    );
+    return false;
+  }
+  Map<String, dynamic> profile;
+  try {
+    profile = (await FirebaseFirestore.instance.collection('users').doc(user.uid).get()).data() ?? {};
+  } catch (_) {
+    return true; // A failed read must not block a booking.
+  }
+  if (((profile['phone'] as String?) ?? '').trim().isNotEmpty) return true;
+  if (!context.mounted) return false;
+  final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
+    builder: (_) => EditProfileScreen(initial: {'name': user.displayName ?? '', ...profile}, completing: true),
+  ));
+  return saved == true;
+}
+
+/// "Continue with Google". New accounts are asked for their phone number
+/// straight away, since courts are only booked with contact details.
+Future<void> signInWithGoogle(BuildContext context) async {
+  final provider = GoogleAuthProvider()..setCustomParameters({'prompt': 'select_account'});
+  try {
+    final cred = kIsWeb
+        ? await FirebaseAuth.instance.signInWithPopup(provider)
+        : await FirebaseAuth.instance.signInWithProvider(provider);
+    final user = cred.user!;
+    final ref = FirebaseFirestore.instance.collection('users').doc(user.uid);
+    final existing = (await ref.get()).data() ?? {};
+    await ref.set({
+      if (((existing['name'] as String?) ?? '').isEmpty) 'name': user.displayName ?? '',
+      'email': user.email ?? '',
+      if (existing['createdAt'] == null) 'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    if (!context.mounted) return;
+    final nav = Navigator.of(context);
+    if (((existing['phone'] as String?) ?? '').trim().isEmpty) {
+      await nav.push<bool>(MaterialPageRoute(
+        builder: (_) => EditProfileScreen(initial: {'name': user.displayName ?? '', ...existing}, completing: true),
+      ));
+    }
+    final next = await homeScreenForUser(user);
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => next), (route) => false);
+    openPendingJoin(nav);
+  } on FirebaseAuthException catch (e) {
+    const cancelled = {'popup-closed-by-user', 'cancelled-popup-request', 'web-context-canceled', 'canceled'};
+    if (cancelled.contains(e.code) || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('הכניסה עם Google נכשלה', 'Google sign-in failed') + (e.message != null ? ' — ${e.message}' : '')),
+      backgroundColor: colorError,
+    ));
+  }
+}
+
+/// Shown to guests on tabs that need an account (My bookings, Profile).
+class GuestGate extends StatelessWidget {
+  final String title;
+  final String message;
+  const GuestGate({super.key, required this.title, required this.message});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: bgColor,
+    appBar: PlayerAppBar(title: title),
+    body: Center(
+      child: Padding(
+        padding: const EdgeInsets.all(spaceLg),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Icon(Icons.lock_outline_rounded, color: textSecondary, size: 56),
+            const SizedBox(height: spaceMd),
+            Text(message, textAlign: TextAlign.center,
+              style: TextStyle(color: textSecondary, fontSize: 15, height: 1.4)),
+            const SizedBox(height: spaceLg),
+            appPrimaryButton(
+              label: tr('כניסה', 'Sign in'),
+              icon: Icons.login,
+              onPressed: () => navigateTo(context, const LoginScreen()),
+              identifier: 'guest_tab_sign_in',
+            ),
+            const SizedBox(height: spaceSm),
+            TextButton(
+              onPressed: () => navigateTo(context, const RegisterScreen()),
+              child: Text(tr('אין לך חשבון? הירשם', 'No account? Register'),
+                style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+            ),
+          ]),
+        ),
+      ),
+    ),
+  );
 }
 
 // ====================================================
@@ -1924,7 +2087,7 @@ void main() async {
       final token = await messaging.getToken();
       if (token != null) {
         final uid = FirebaseAuth.instance.currentUser?.uid;
-        if (uid != null) {
+        if (uid != null && !isGuestUser) {
           await FirebaseFirestore.instance.collection('users').doc(uid).set({'fcmToken': token}, SetOptions(merge: true));
         }
       }
@@ -2488,6 +2651,37 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     const SizedBox(height: spaceMd),
 
+                    Row(children: [
+                      Expanded(child: Divider(color: borderColor)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: spaceSm),
+                        child: Text(tr('או', 'or'), style: TextStyle(color: textSecondary, fontSize: 12)),
+                      ),
+                      Expanded(child: Divider(color: borderColor)),
+                    ]),
+                    const SizedBox(height: spaceMd),
+                    Semantics(
+                      identifier: 'login_google_button',
+                      button: true,
+                      container: true,
+                      child: OutlinedButton(
+                        onPressed: _loading ? null : () => signInWithGoogle(context),
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: cardColor,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          side: BorderSide(color: borderColor),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                        ),
+                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                          const Text('G', style: TextStyle(color: Color(0xFF4285F4), fontSize: 18, fontWeight: FontWeight.w900)),
+                          const SizedBox(width: 10),
+                          Text(tr('המשך עם Google', 'Continue with Google'),
+                            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w800)),
+                        ]),
+                      ),
+                    ),
+                    const SizedBox(height: spaceSm),
+
                     Align(
                       alignment: AlignmentDirectional.centerEnd,
                       child: TextButton(
@@ -2530,6 +2724,21 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ],
+                    ),
+
+                    const SizedBox(height: spaceSm),
+                    Center(
+                      child: Semantics(
+                        identifier: 'login_guest_button',
+                        button: true,
+                        container: true,
+                        child: TextButton.icon(
+                          onPressed: _loading ? null : () => continueAsGuest(context),
+                          icon: Icon(Icons.visibility_outlined, size: 16, color: textSecondary),
+                          label: Text(tr('המשך כאורח — רק לצפייה', 'Continue as guest — view only'),
+                            style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
                     ),
 
                     const SizedBox(height: spaceLg),
@@ -5438,7 +5647,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
 
   Future<void> _checkVerified({bool fromButton = false}) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || user.emailVerified) return;
+    if (user == null || user.isAnonymous || user.emailVerified) return;
     bool verified;
     try {
       verified = await _refreshVerified(user);
@@ -5602,7 +5811,8 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                           final unreadCount = snap.data?.docs.length ?? 0;
                           return _topIconButton(
                             icon: Icons.notifications_outlined,
-                            onTap: () {
+                            onTap: () async {
+                              if (!await requireAccount(context) || !context.mounted) return;
                               navigateTo(context, const NotificationsScreen(),);
                             },
                             badge: unreadCount > 0 ? '$unreadCount' : null,
@@ -5647,9 +5857,39 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                           _welcomeCard(),
                         ],
 
+                        if (isGuestUser) ...[
+                          const SizedBox(height: spaceMd),
+                          Semantics(
+                            identifier: 'guest_banner',
+                            container: true,
+                            child: Container(
+                              padding: const EdgeInsets.all(spaceSm),
+                              decoration: BoxDecoration(
+                                color: accentGreen.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(radiusLg),
+                                border: Border.all(color: accentGreen.withValues(alpha: 0.3)),
+                              ),
+                              child: Row(children: [
+                                Icon(Icons.visibility_outlined, color: accentGreen, size: 20),
+                                const SizedBox(width: spaceSm),
+                                Expanded(
+                                  child: Text(tr('אתה גולש כאורח. כדי להזמין צריך להתחבר.', "You're browsing as a guest. Sign in to book."),
+                                    style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
+                                ),
+                                TextButton(
+                                  onPressed: () => navigateTo(context, const LoginScreen()),
+                                  style: TextButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor,
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                                  child: Text(tr('כניסה', 'Sign in'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                                ),
+                              ]),
+                            ),
+                          ),
+                        ],
+
                         Builder(builder: (ctx) {
                           final user = FirebaseAuth.instance.currentUser;
-                          if (user == null || user.emailVerified) return const SizedBox.shrink();
+                          if (user == null || user.isAnonymous || user.emailVerified) return const SizedBox.shrink();
                           return Padding(
                             padding: const EdgeInsets.only(top: spaceMd),
                             child: Container(
@@ -5914,10 +6154,16 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
             child: _menuRow(Icons.language, isHebrew ? 'English' : 'עברית', textPrimary),
           ),
           const PopupMenuDivider(),
-          PopupMenuItem<String>(
-            value: 'logout',
-            child: _menuRow(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red),
-          ),
+          if (isGuestUser)
+            PopupMenuItem<String>(
+              value: 'login',
+              child: _menuRow(Icons.login, tr('כניסה / הרשמה', 'Sign in / Register'), accentGreen),
+            )
+          else
+            PopupMenuItem<String>(
+              value: 'logout',
+              child: _menuRow(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red),
+            ),
         ],
         onSelected: (value) async {
           switch (value) {
@@ -5929,6 +6175,9 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
               break;
             case 'language':
               toggleAppLanguage(context);
+              break;
+            case 'login':
+              navigateTo(context, const LoginScreen());
               break;
             case 'logout':
               final ok = await showDialog<bool>(
@@ -6103,7 +6352,10 @@ class SchoolsScreen extends StatelessWidget {
           button: true,
           container: true,
           child: OutlinedButton.icon(
-            onPressed: () => navigateTo(context, const MyTrainingRegistrationsScreen()),
+            onPressed: () async {
+              if (!await requireAccount(context) || !context.mounted) return;
+              navigateTo(context, const MyTrainingRegistrationsScreen());
+            },
             icon: Icon(Icons.assignment_turned_in_outlined, color: colorInfo, size: 18),
             label: Text(tr('הרישומים שלי', 'My registrations'),
               style: TextStyle(color: colorInfo, fontWeight: FontWeight.w800, fontSize: 14)),
@@ -6200,6 +6452,13 @@ class _VenueCard extends StatelessWidget {
     final courtsText = sports.length > 1
         ? '${ids.length} ${tr('מגרשים', 'courts')} · ${sports.map(sportLabel).join(' / ')}'
         : '${ids.length} ${courtWord(sport, 'מגרשים', 'fields', plural: true)}';
+    final rates = <int>[
+      for (final s in allStadiums)
+        if (ids.contains(s['id']) && s['pricePerHour'] is num) (s['pricePerHour'] as num).round(),
+    ];
+    final lowest = rates.isEmpty ? null : rates.reduce((a, b) => a < b ? a : b);
+    final priceText = lowest == null ? null
+        : '${rates.toSet().length > 1 ? tr('החל מ-', 'from ') : ''}₪$lowest / ${tr('שעה', 'hour')}';
 
     final thumb = StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('venue_config').doc(id).snapshots(),
@@ -6254,6 +6513,15 @@ class _VenueCard extends StatelessWidget {
                     Flexible(child: Text(courtsText, maxLines: 1, overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
                   ]),
+                  if (priceText != null) ...[
+                    const SizedBox(height: 4),
+                    Semantics(
+                      identifier: 'venue_price_$id',
+                      container: true,
+                      child: Text(priceText, maxLines: 1, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w900)),
+                    ),
+                  ],
                 ]),
               ),
               const SizedBox(width: spaceXs),
@@ -6510,6 +6778,7 @@ class _BookingScreenState extends State<BookingScreen> {
 
   Future<void> _book() async {
     if (_selSlot == null) return;
+    if (!await requireAccount(context) || !mounted) return;
     final slot = _visibleSlots[_selSlot!];
     final label = _slotLabel(slot);
 
@@ -7412,6 +7681,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
   }
 
   Future<void> _join() async {
+    if (!await requireAccount(context) || !mounted) return;
     if (_booking!['maxPlayers'] != null) {
       setState(() { _loading=true; _error=''; });
       final err = await _joinCapped();
@@ -7766,7 +8036,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 // ==================== EDIT PROFILE ====================
 class EditProfileScreen extends StatefulWidget {
   final Map<String, dynamic> initial;
-  const EditProfileScreen({super.key, required this.initial});
+  /// After a sign-in that gave no phone number (Google): same form, with a
+  /// title asking the player to complete their details.
+  final bool completing;
+  const EditProfileScreen({super.key, required this.initial, this.completing = false});
 
   @override
   State<EditProfileScreen> createState() => _EditProfileScreenState();
@@ -7867,7 +8140,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     return Scaffold(
       backgroundColor: bgColor,
-      appBar: PlayerAppBar(title: tr('ערוך פרטים', 'Edit Details')),
+      appBar: PlayerAppBar(title: widget.completing ? tr('השלמת פרטים', 'Complete your details') : tr('ערוך פרטים', 'Edit Details')),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -7902,6 +8175,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           label: tr('טלפון', 'Phone'),
                           icon: Icons.phone_outlined,
                           keyboardType: TextInputType.phone,
+                          validator: (v) => (v == null || v.trim().isEmpty) ? tr('שדה חובה', 'Required') : null,
                         ),
                         const SizedBox(height: spaceMd),
                         appTextField(
@@ -9405,8 +9679,8 @@ class TrainingGroupDetailScreen extends StatefulWidget {
 class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
 
   Future<void> _register(BuildContext ctx) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (!await requireAccount(ctx) || !ctx.mounted) return;
+    final user = FirebaseAuth.instance.currentUser!;
     final childNameCtrl   = TextEditingController();
     final childAgeCtrl    = TextEditingController();
     final parentNameCtrl  = TextEditingController(text: user.displayName ?? '');
