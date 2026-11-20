@@ -9493,7 +9493,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
     );
   }
 
-  Future<void> _cancelReg(BuildContext ctx, String docId, String childName) async {
+  Future<void> _cancelReg(BuildContext ctx, String docId, String groupId, String childName) async {
     final ok = await showDialog<bool>(context: ctx, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
       title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
@@ -9508,7 +9508,10 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
       ],
     ));
     if (ok != true) return;
-    await FirebaseFirestore.instance.collection('training_registrations').doc(docId).update({'status': 'cancelled'});
+    final batch = FirebaseFirestore.instance.batch();
+    batch.update(FirebaseFirestore.instance.collection('training_registrations').doc(docId), {'status': 'cancelled'});
+    if (groupId.isNotEmpty) batch.delete(groupSeats(groupId).doc(docId));
+    await batch.commit();
     if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(tr('הרישום בוטל', 'Cancelled')), backgroundColor: Colors.red));
   }
 
@@ -9594,7 +9597,7 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
             ),
           if (status != 'cancelled')
             TextButton.icon(
-              onPressed: () => _cancelReg(ctx, doc.id as String, r['childName'] ?? ''),
+              onPressed: () => _cancelReg(ctx, doc.id as String, (r['groupId'] as String?) ?? '', r['childName'] ?? ''),
               icon: const Icon(Icons.remove_circle_outline, size: 14, color: Colors.red),
               label: Text(tr('בטל', 'Cancel'), style: const TextStyle(color: Colors.red, fontSize: 11)),
               style: TextButton.styleFrom(backgroundColor: Colors.red.withValues(alpha: 0.07), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
@@ -9835,8 +9838,10 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
     ));
     if (ok != true) return;
     final regs = await FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: docId).where('stadiumId', isEqualTo: stadiumId).get();
+    final seats = await groupSeats(docId).get();
     final batch = FirebaseFirestore.instance.batch();
     for (final d in regs.docs) batch.delete(d.reference);
+    for (final d in seats.docs) batch.delete(d.reference);
     batch.delete(FirebaseFirestore.instance.collection('training_groups').doc(docId));
     await batch.commit();
   }
@@ -10408,7 +10413,7 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
                             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                               Text('₪${g['price']} $priceLabel', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
                               StreamBuilder(
-                                stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: doc.id).snapshots(),
+                                stream: groupSeats(doc.id).snapshots(),
                                 builder: (_, rs) {
                                   final count = rs.data?.docs.length ?? 0;
                                   final cap   = g['capacity'] as int? ?? 0;
@@ -10438,6 +10443,12 @@ class _TrainingGroupsListScreenState extends State<TrainingGroupsListScreen> {
     ),
   );
 }
+
+/// One doc per taken spot: training_groups/{groupId}/seats/{registrationId}.
+/// It holds no child or parent details, so every parent can count the spots
+/// (the registrations themselves are private).
+CollectionReference<Map<String, dynamic>> groupSeats(String groupId) =>
+    FirebaseFirestore.instance.collection('training_groups').doc(groupId).collection('seats');
 
 // ==================== TRAINING GROUP DETAIL ====================
 class TrainingGroupDetailScreen extends StatefulWidget {
@@ -10489,7 +10500,13 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                 if (childNameCtrl.text.trim().isEmpty || parentPhoneCtrl.text.trim().isEmpty) return;
                 setS(() => saving = true);
                 try {
-                  await FirebaseFirestore.instance.collection('training_registrations').add({
+                  final regRef = FirebaseFirestore.instance.collection('training_registrations').doc();
+                  final batch = FirebaseFirestore.instance.batch();
+                  batch.set(groupSeats(widget.groupId).doc(regRef.id), {
+                    'parentUserId': user.uid,
+                    'createdAt':    DateTime.now().toIso8601String(),
+                  });
+                  batch.set(regRef, {
                     'groupId':        widget.groupId,
                     'groupName':      widget.group['name'] ?? '',
                     'stadiumId':      widget.group['stadiumId'] ?? '',
@@ -10506,6 +10523,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                     'paidAt':         null,
                     'paymentHistory': [],
                   });
+                  await batch.commit();
                   await FirebaseFirestore.instance.collection('notifications').add({
                     'userId':    user.uid,
                     'title':     tr('נרשמת בהצלחה!', 'Registration Successful!'),
@@ -10632,7 +10650,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
           const SizedBox(height: 12),
         ],
         StreamBuilder(
-          stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: widget.groupId).snapshots(),
+          stream: groupSeats(widget.groupId).snapshots(),
           builder: (ctx, snap) {
             final count      = snap.data?.docs.length ?? 0;
             final cap        = g['capacity'] as int? ?? 0;
@@ -10718,7 +10736,7 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _cancelRegistration(BuildContext ctx, String docId, String groupName) async {
+  Future<void> _cancelRegistration(BuildContext ctx, String docId, String groupId, String groupName) async {
     final ok = await showDialog<bool>(context: ctx, builder: (_) => AlertDialog(
       backgroundColor: cardColor,
       title: Text(tr('בטל רישום?', 'Cancel Registration?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
@@ -10733,7 +10751,10 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
       ],
     ));
     if (ok != true) return;
-    await FirebaseFirestore.instance.collection('training_registrations').doc(docId).delete();
+    final batch = FirebaseFirestore.instance.batch();
+    batch.delete(FirebaseFirestore.instance.collection('training_registrations').doc(docId));
+    if (groupId.isNotEmpty) batch.delete(groupSeats(groupId).doc(docId));
+    await batch.commit();
     if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text(tr('הרישום בוטל', 'Registration cancelled')), backgroundColor: Colors.red));
   }
 
@@ -10818,7 +10839,7 @@ class MyTrainingRegistrationsScreen extends StatelessWidget {
                     if (status != 'cancelled') ...[
                       const SizedBox(width: 6),
                       Expanded(child: TextButton.icon(
-                        onPressed: () => _cancelRegistration(context, doc.id, r['groupName'] ?? ''),
+                        onPressed: () => _cancelRegistration(context, doc.id, (r['groupId'] as String?) ?? '', r['groupName'] ?? ''),
                         icon: const Icon(Icons.remove_circle_outline, size: 15, color: Colors.red),
                         label: Text(tr('בטל רישום', 'Cancel'), style: const TextStyle(color: Colors.red, fontSize: 11)),
                         style: TextButton.styleFrom(backgroundColor: Colors.red.withValues(alpha: 0.07), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
