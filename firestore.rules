@@ -26,12 +26,10 @@ service cloud.firestore {
         && request.auth.token.email_verified == true;
     }
 
+    // Admin over everything = the owner. Courts and their admins are all
+    // set up from the owner's screen; there are no built-in admin accounts.
     function isAdmin() {
-      return isOwner() || (isSignedIn() && request.auth.token.email in [
-        'admin@gmail.com',
-        'admin.md9@gmail.com',
-        'admin.ystadium@gmail.com'
-      ]);
+      return isOwner();
     }
 
     // Court admin: appointed by the owner in court_admins/{email}, limited to
@@ -89,6 +87,10 @@ service cloud.firestore {
     match /stadiums/{stadiumId} {
       allow read:  if isSignedIn();
       allow write: if isOwner();
+      // The court's admin sets its price, opening hours and booking length.
+      allow update: if managesStadium(stadiumId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pricePerHour', 'price', 'openTime', 'closeTime', 'slotMinutes']);
     }
 
     // Which courts each admin manages. Doc id is the lowercased email.
@@ -129,24 +131,50 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Training groups (kids' programs).
+    // Training groups (kids' programs). A court admin runs the school of
+    // the courts they manage.
     match /training_groups/{groupId} {
-      allow read:  if isSignedIn();
-      allow write: if isAdmin();
+      allow read:   if isSignedIn();
+      allow create: if isAdmin() || managesStadium(request.resource.data.get('stadiumId', ''));
+      allow update: if isAdmin() || (
+        managesStadium(resource.data.get('stadiumId', ''))
+        && managesStadium(request.resource.data.get('stadiumId', ''))
+      );
+      allow delete: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
     }
 
     // Parents register kids - parents see/manage their own; admins manage all.
     match /training_registrations/{regId} {
       allow read:   if isSignedIn() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
       allow create: if isMember()
         && request.resource.data.parentUserId == request.auth.uid;
       allow update: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
       allow delete: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
+      );
+    }
+
+    // Players ask for the same time every week; the court's admin approves
+    // (creating a recurring block) or declines.
+    match /fixed_requests/{reqId} {
+      allow read:   if isMember() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
+      );
+      allow create: if isMember()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
+      allow delete: if isMember() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
     }
 
