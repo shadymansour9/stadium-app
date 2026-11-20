@@ -4,7 +4,7 @@
       "android": {
         "default": {
           "projectId": "stadium-d5b5f",
-          "appId": "1:252689987865:android:9d652fd2baa5aed749ad88",
+          "appId": "1:252689987865:android:59594440c04b18fa49ad88",
           "fileOutput": "android/app/google-services.json"
         }
       },
@@ -12,7 +12,7 @@
         "lib/firebase_options.dart": {
           "projectId": "stadium-d5b5f",
           "configurations": {
-            "android": "1:252689987865:android:9d652fd2baa5aed749ad88",
+            "android": "1:252689987865:android:59594440c04b18fa49ad88",
             "ios": "1:252689987865:ios:9b92a92ddb739e7e49ad88",
             "macos": "1:252689987865:ios:9b92a92ddb739e7e49ad88",
             "web": "1:252689987865:web:f23659e8d126009249ad88",
