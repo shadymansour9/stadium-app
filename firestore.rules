@@ -87,6 +87,10 @@ service cloud.firestore {
     match /stadiums/{stadiumId} {
       allow read:  if isSignedIn();
       allow write: if isOwner();
+      // The court's admin sets its price, opening hours and booking length.
+      allow update: if managesStadium(stadiumId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pricePerHour', 'price', 'openTime', 'closeTime', 'slotMinutes']);
     }
 
     // Which courts each admin manages. Doc id is the lowercased email.
