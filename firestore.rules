@@ -127,24 +127,50 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Training groups (kids' programs).
+    // Training groups (kids' programs). A court admin runs the school of
+    // the courts they manage.
     match /training_groups/{groupId} {
-      allow read:  if isSignedIn();
-      allow write: if isAdmin();
+      allow read:   if isSignedIn();
+      allow create: if isAdmin() || managesStadium(request.resource.data.get('stadiumId', ''));
+      allow update: if isAdmin() || (
+        managesStadium(resource.data.get('stadiumId', ''))
+        && managesStadium(request.resource.data.get('stadiumId', ''))
+      );
+      allow delete: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
     }
 
     // Parents register kids - parents see/manage their own; admins manage all.
     match /training_registrations/{regId} {
       allow read:   if isSignedIn() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
       allow create: if isMember()
         && request.resource.data.parentUserId == request.auth.uid;
       allow update: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
       allow delete: if isMember() && (
         resource.data.parentUserId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
+      );
+    }
+
+    // Players ask for the same time every week; the court's admin approves
+    // (creating a recurring block) or declines.
+    match /fixed_requests/{reqId} {
+      allow read:   if isMember() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
+      );
+      allow create: if isMember()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
+      allow delete: if isMember() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+        || managesStadium(resource.data.get('stadiumId', ''))
       );
     }
 

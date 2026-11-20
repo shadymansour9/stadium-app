@@ -13,6 +13,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'export_stub.dart' if (dart.library.html) 'export_web.dart';
@@ -428,13 +429,27 @@ bool seenWelcome = false;
 /// someone is signed in.
 String? pendingJoinBookingId;
 
+/// Venue id from a parents' school link (?school=…), opened after sign-in.
+String? pendingSchoolVenueId;
+
 /// Shows the booking from a shared link on top of the user's home screen, so
 /// Back returns to their normal home whatever their role.
 void openPendingJoin(NavigatorState nav) {
   final id = pendingJoinBookingId;
-  if (id == null || id.isEmpty) return;
-  pendingJoinBookingId = null;
-  nav.push(MaterialPageRoute(builder: (_) => JoinByCodeScreen(bookingId: id)));
+  if (id != null && id.isNotEmpty) {
+    pendingJoinBookingId = null;
+    nav.push(MaterialPageRoute(builder: (_) => JoinByCodeScreen(bookingId: id)));
+    return;
+  }
+  final school = pendingSchoolVenueId;
+  if (school != null && school.isNotEmpty) {
+    pendingSchoolVenueId = null;
+    final v = venueById(school);
+    nav.push(MaterialPageRoute(builder: (_) => TrainingGroupsListScreen(
+      venueId: school,
+      venueName: (v?['name'] as String?) ?? tr('בית ספר', 'School'),
+    )));
+  }
 }
 
 /// Links the booking's document, not its 4-digit code: codes can repeat.
@@ -492,7 +507,28 @@ class BookingSharePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final link = bookingJoinLink(bookingId);
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      Text(tr('שלח לחברים', 'SHARE WITH FRIENDS'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 2)),
+      Semantics(
+        identifier: 'share_whatsapp',
+        button: true,
+        container: true,
+        child: SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: () => sendWhatsApp(context,
+              tr('בואו לשחק! ⚽ $summary\nלהצטרפות: $link\nקוד: $code', "Let's play! ⚽ $summary\nJoin: $link\nCode: $code")),
+            icon: const Icon(Icons.chat),
+            label: Text(tr('שלח לחברים בוואטסאפ', 'Send to friends on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF25D366),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 14),
+      Text(tr('או שלח את הקוד', 'OR SHARE THE CODE'), style: TextStyle(color: textSecondary, fontSize: 11, letterSpacing: isHebrew ? 0 : 2)),
       const SizedBox(height: 8),
       GestureDetector(
         onTap: () async {
@@ -1995,7 +2031,10 @@ void main() async {
   if (kIsWeb && Uri.base.queryParameters['e2e'] == '1') {
     SemanticsBinding.instance.ensureSemantics();
   }
-  if (kIsWeb) pendingJoinBookingId = Uri.base.queryParameters['join'];
+  if (kIsWeb) {
+    pendingJoinBookingId = Uri.base.queryParameters['join'];
+    pendingSchoolVenueId = Uri.base.queryParameters['school'];
+  }
   try {
     final prefs = await SharedPreferences.getInstance();
     isLightMode = prefs.getBool('lightMode') ?? false;
@@ -2137,7 +2176,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
   Future<void> _goNext() async {
     if (!mounted) return;
-    final user = FirebaseAuth.instance.currentUser;
+    var user = FirebaseAuth.instance.currentUser;
+    // A parent opening the school link sees the groups right away, as a guest;
+    // signing up asks for an account.
+    if (user == null && (pendingSchoolVenueId ?? '').isNotEmpty) {
+      try {
+        user = (await FirebaseAuth.instance.signInAnonymously()).user;
+        await loadCatalog();
+      } catch (_) {/* falls back to the login screen */}
+      if (!mounted) return;
+    }
     final Widget next = user == null ? const LoginScreen() : await homeScreenForUser(user);
     if (!mounted) return;
     final nav = Navigator.of(context);
@@ -3438,13 +3486,18 @@ Widget _adminBookCard(Map<String,dynamic> b, {required String docId, required Bu
 }
 
 // ==================== ADMIN STADIUM TAB ====================
+/// full: the owner's view with every tool. schedule / reports: one part of
+/// it, in plainer words, for the court admin's bottom-bar tabs.
+enum AdminTabMode { full, schedule, reports }
+
 class AdminStadiumTab extends StatefulWidget {
   final String stadiumName, stadiumId;
   final int price;
   /// Court admins manage bookings and the schedule only. Their rules don't
   /// cover booking types, images or training groups, so those tools are hidden.
   final bool limitedTools;
-  const AdminStadiumTab({super.key, required this.stadiumName, required this.stadiumId, required this.price, this.limitedTools = false});
+  final AdminTabMode mode;
+  const AdminStadiumTab({super.key, required this.stadiumName, required this.stadiumId, required this.price, this.limitedTools = false, this.mode = AdminTabMode.full});
   @override State<AdminStadiumTab> createState() => _AdminStadiumTabState();
 }
 class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProviderStateMixin {
@@ -4205,30 +4258,55 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     );
   }
 
+  Widget _daySelector() =>
+        SizedBox(height: 80, child: ListView.builder(
+      scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      itemCount: _days.length,
+      itemBuilder: (ctx, i) {
+        final isSel = _selDay == i;
+        return GestureDetector(
+          onTap: () => setState(() => _selDay = i),
+          child: Container(margin: const EdgeInsets.only(right: 8), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(color: isSel ? accentGreen : cardColor, borderRadius: BorderRadius.circular(10), border: Border.all(color: isSel ? accentGreen : i==0 ? accentGreen.withValues(alpha: 0.4) : borderColor)),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Text(_days[i]['name']!, style: TextStyle(color: isSel?bgColor:textSecondary, fontWeight: FontWeight.bold, fontSize: 11)),
+              Text(_days[i]['date']!, style: TextStyle(color: isSel?bgColor.withValues(alpha: 0.7):const Color(0xFF555555), fontSize: 10)),
+              if (i==0) Text(tr('היום', 'TODAY'), style: TextStyle(color: isSel?bgColor:accentGreen, fontSize: 8, fontWeight: FontWeight.w900)),
+            ]),
+          ),
+        );
+      },
+    ));
+
   @override
   Widget build(BuildContext context) {
+    if (widget.mode == AdminTabMode.schedule) {
+      return Column(children: [_daySelector(), Expanded(child: _buildScheduleView())]);
+    }
+    if (widget.mode == AdminTabMode.reports) {
+      return DefaultTabController(
+        length: 3,
+        child: Column(children: [
+          TabBar(
+            indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
+            tabs: [
+              Tab(text: tr('הזמנות קרובות', 'Upcoming')),
+              Tab(text: tr('הזמנות שעברו', 'Past')),
+              Tab(text: tr('הכנסות', 'Income')),
+            ],
+          ),
+          Expanded(child: TabBarView(children: [
+            _buildBookingsList(upcoming: true),
+            _buildBookingsList(upcoming: false),
+            _buildStadiumReports(),
+          ])),
+        ]),
+      );
+    }
     final isReports = _tabIndex == 3;
     return Column(children: [
       if (!isReports) ...[
-        // Day selector
-        SizedBox(height: 80, child: ListView.builder(
-          scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          itemCount: _days.length,
-          itemBuilder: (ctx, i) {
-            final isSel = _selDay == i;
-            return GestureDetector(
-              onTap: () => setState(() => _selDay = i),
-              child: Container(margin: const EdgeInsets.only(right: 8), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(color: isSel ? accentGreen : cardColor, borderRadius: BorderRadius.circular(10), border: Border.all(color: isSel ? accentGreen : i==0 ? accentGreen.withValues(alpha: 0.4) : borderColor)),
-                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Text(_days[i]['name']!, style: TextStyle(color: isSel?bgColor:textSecondary, fontWeight: FontWeight.bold, fontSize: 11)),
-                  Text(_days[i]['date']!, style: TextStyle(color: isSel?bgColor.withValues(alpha: 0.7):const Color(0xFF555555), fontSize: 10)),
-                  if (i==0) Text(tr('היום', 'TODAY'), style: TextStyle(color: isSel?bgColor:accentGreen, fontSize: 8, fontWeight: FontWeight.w900)),
-                ]),
-              ),
-            );
-          },
-        )),
+        _daySelector(),
         // Search bar
         Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: TextField(
           onChanged: (v) => setState(() => _search = v),
@@ -4266,6 +4344,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
   }
 
   Widget _buildScheduleView() {
+    final simple = widget.mode == AdminTabMode.schedule;
     return StreamBuilder(
       stream: FirebaseFirestore.instance.collection('recurring_blocks').where('stadiumId', isEqualTo: widget.stadiumId).snapshots(),
       builder: (ctx, recurSnap) {
@@ -4307,13 +4386,18 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               ),
             ),
             const SizedBox(height: spaceMd),
+            if (simple) ...[
+              _adminHint(tr('בחר יום למעלה. ירוק = פנוי, כתום = מוזמן. אפשר לסגור שעה (למשל לתיקון המגרש) וללחוץ על הזמנה כדי לראות פרטים או לבטל.',
+                  'Pick a day above. Green = free, orange = booked. You can close a time (e.g. for repairs) and tap a booking to see it or cancel.')),
+              const SizedBox(height: spaceMd),
+            ],
             appPrimaryButton(
-              label: tr('הוסף הזמנה ידנית','Add Manual Booking'),
+              label: simple ? tr('הוספת הזמנה', 'Add a booking') : tr('הוסף הזמנה ידנית','Add Manual Booking'),
               icon: Icons.add_circle_outline,
               onPressed: () => showManualBookingDialog(context, widget.stadiumName, widget.stadiumId, widget.price),
             ),
             const SizedBox(height: spaceMd),
-            Row(children: [
+            if (!simple) Row(children: [
               if (!widget.limitedTools) ...[
                 Expanded(child: appToolButton(
                   icon: Icons.category_outlined,
@@ -4347,7 +4431,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 onPressed: () => _showRecurringBlockDialog(),
                 icon: const Icon(Icons.event_repeat_outlined, size: 18, color: Colors.purple),
                 label: Text(
-                  tr('הזמנה קבועה שבועית', 'Weekly Recurring Block'),
+                  simple ? tr('שעה קבועה כל שבוע', 'Same time every week') : tr('הזמנה קבועה שבועית', 'Weekly Recurring Block'),
                   style: const TextStyle(color: Colors.purple, fontSize: 13, fontWeight: FontWeight.w800),
                 ),
                 style: OutlinedButton.styleFrom(
@@ -4359,10 +4443,20 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             ),
             const SizedBox(height: 10),
             Row(children: [
-              _secTitle('${tr('לוח זמנים', 'SCHEDULE')} — ${_days[_selDay]['date']}'), const Spacer(),
+              _secTitle(simple ? '${tr('השעות של', 'TIMES ON')} ${_days[_selDay]['name']} ${_days[_selDay]['date']}' : '${tr('לוח זמנים', 'SCHEDULE')} — ${_days[_selDay]['date']}'), const Spacer(),
               PopupMenuButton<int>(
                 tooltip: tr('אורך משבצת', 'Slot length'),
-                icon: Icon(Icons.schedule, color: textSecondary, size: 18),
+                icon: simple ? null : Icon(Icons.schedule, color: textSecondary, size: 18),
+                child: simple
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.schedule, color: textSecondary, size: 16),
+                          const SizedBox(width: 4),
+                          Text(tr('אורך משחק', 'Game length'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+                        ]),
+                      )
+                    : null,
                 color: cardColor,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(radiusLg),
@@ -4422,8 +4516,15 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                       onPressed: fixedId != null ? () => _cancelRecurringBlock(fixedId, label) : null,
                     ),
                   ] else if (!isBooked) ...[
-                    IconButton(icon: const Icon(Icons.edit_outlined, size: 18), color: textSecondary, onPressed: () => _editSlot(slot, slots.indexOf(slot), bookedLabels, slots)),
-                    IconButton(icon: Icon(isBlocked ? Icons.lock_open_outlined : Icons.block_outlined, size: 18), color: isBlocked ? accentGreen : Colors.red, onPressed: () => _toggleBlock(slot, isBlocked, bookedLabels)),
+                    IconButton(icon: const Icon(Icons.edit_outlined, size: 18), color: textSecondary, tooltip: tr('שינוי השעות', 'Change times'), onPressed: () => _editSlot(slot, slots.indexOf(slot), bookedLabels, slots)),
+                    if (simple)
+                      TextButton(
+                        onPressed: () => _toggleBlock(slot, isBlocked, bookedLabels),
+                        child: Text(isBlocked ? tr('פתח', 'Open') : tr('סגור שעה', 'Close'),
+                          style: TextStyle(color: isBlocked ? accentGreen : Colors.red, fontWeight: FontWeight.w800, fontSize: 12)),
+                      )
+                    else
+                      IconButton(icon: Icon(isBlocked ? Icons.lock_open_outlined : Icons.block_outlined, size: 18), color: isBlocked ? accentGreen : Colors.red, onPressed: () => _toggleBlock(slot, isBlocked, bookedLabels)),
                   ] else ...[
                     Builder(builder: (ctx) {
                       try {
@@ -4432,6 +4533,13 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                           final bookingData = match.first.data();
                           final count = ((bookingData['players'] as List?) ?? []).length;
                           final phone = bookingData['phone'] as String? ?? '';
+                          if (simple) {
+                            return TextButton(
+                              onPressed: () => showBookingDetails(context, bookingData, isAdmin: true, docId: match.first.id),
+                              child: Text('${(bookingData['userName'] as String?) ?? ''} · ${tr('פרטים', 'Details')}',
+                                style: TextStyle(color: colorWarning, fontWeight: FontWeight.w800, fontSize: 12)),
+                            );
+                          }
                           return GestureDetector(
                             onTap: () => showBookingDetails(context, bookingData, isAdmin: true, docId: match.first.id),
                             child: Row(children: [
@@ -4451,7 +4559,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               );
             }),
             const SizedBox(height: 8),
-            Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.withValues(alpha: 0.2))),
+            if (!simple) Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.withValues(alpha: 0.2))),
               child: Row(children: [const Icon(Icons.info_outline, color: Colors.blue, size: 14), const SizedBox(width: 8), Expanded(child: Text('✏️ ${tr('ערוך','Edit')}  🚫 ${tr('חסום/בטל','Block')}  ℹ️ ${tr('לחץ לפרטים + ביטול','Tap for details + cancel')}', style: const TextStyle(color: Colors.blue, fontSize: 11)))])),
           ]);
         },
@@ -4467,7 +4575,122 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
   Widget _badge(String t, Color c) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withValues(alpha: 0.4))), child: Text(t, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.w900)));
 }
 
+// ==================== CONTACT & SHARE HELPERS ====================
+/// Israeli numbers (05x…) become 9725x… for WhatsApp links.
+String waPhone(String phone) {
+  final p = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+  if (p.startsWith('+')) return p.substring(1);
+  if (p.startsWith('0')) return '972${p.substring(1)}';
+  return p;
+}
+
+/// Opens a phone call, WhatsApp chat or web page outside the app.
+Future<void> openExternalLink(BuildContext context, Uri uri) async {
+  var ok = false;
+  try {
+    ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
+  if (!ok && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(tr('לא הצלחנו לפתוח', "Couldn't open it")),
+      backgroundColor: colorError,
+    ));
+  }
+}
+
+/// WhatsApp with [text] ready to send, to [phone] or to a chat the user picks.
+Future<void> sendWhatsApp(BuildContext context, String text, {String? phone}) => openExternalLink(
+      context,
+      Uri.parse('https://wa.me/${phone == null ? '' : waPhone(phone)}?text=${Uri.encodeComponent(text)}'),
+    );
+
+/// Bookings store their date as "day/month".
+String dateKeyOf(DateTime d) => '${d.day}/${d.month}';
+
+/// A booking's price field is text such as "₪300"; this is the number in it.
+int bookingAmount(Map<String, dynamic> b) =>
+    int.tryParse((b['price']?.toString() ?? '0').split('/').first.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+
+/// Start of a booking ("d/m" + "HH:MM - HH:MM"), or null if it can't be read.
+DateTime? bookingStart(Map<String, dynamic> b) {
+  try {
+    final d = (b['date'] as String).split('/');
+    final t = (b['time'] as String).split('-').first.trim().split(':');
+    final now = DateTime.now();
+    var start = DateTime(now.year, int.parse(d[1]), int.parse(d[0]), int.parse(t[0]), int.parse(t[1]));
+    // "2/1" seen in late December means next year.
+    if (start.isBefore(now.subtract(const Duration(days: 180)))) {
+      start = DateTime(now.year + 1, start.month, start.day, start.hour, start.minute);
+    }
+    return start;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// The parents' sign-up link for a venue's school. Always the website, so it
+/// opens on any phone without the app installed.
+String schoolSignupLink(String venueId) {
+  final origin = kIsWeb ? Uri.base.origin : 'https://stadium-d5b5f.web.app';
+  return '$origin/?${Uri(queryParameters: {'school': venueId}).query}';
+}
+
+Widget _adminActionButton(String id, IconData icon, String label, Color color, VoidCallback onTap) => Semantics(
+      identifier: id,
+      button: true,
+      container: true,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 18, color: color),
+        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w800)),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+          side: BorderSide(color: color.withValues(alpha: 0.45)),
+          backgroundColor: color.withValues(alpha: 0.06),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+        ),
+      ),
+    );
+
+Widget _adminStatTile(String value, String label, IconData icon, Color color) => Container(
+      padding: const EdgeInsets.all(spaceMd),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(radiusLg),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(children: [
+        Icon(icon, color: color, size: 28),
+        const SizedBox(width: spaceSm),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(value, style: TextStyle(color: textPrimary, fontSize: 22, fontWeight: FontWeight.w900)),
+            Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ]),
+    );
+
+/// A short line under a tab's title that says, in plain words, what it is for.
+Widget _adminHint(String text) => Container(
+      padding: const EdgeInsets.all(spaceSm),
+      decoration: BoxDecoration(
+        color: colorInfo.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(radiusMd),
+        border: Border.all(color: colorInfo.withValues(alpha: 0.25)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.lightbulb_outline, color: colorInfo, size: 18),
+        const SizedBox(width: spaceXs),
+        Expanded(child: Text(text, style: TextStyle(color: textPrimary, fontSize: 13, height: 1.4))),
+      ]),
+    );
+
 // ==================== COURT ADMIN (one or more courts) ====================
+/// The court admin's app, made for people who are not technical: a bottom
+/// bar with plain-language tabs, and today's bookings first.
 class CourtAdminScreen extends StatefulWidget {
   final List<String> stadiumIds;
   const CourtAdminScreen({super.key, required this.stadiumIds});
@@ -4476,6 +4699,8 @@ class CourtAdminScreen extends StatefulWidget {
 
 class _CourtAdminScreenState extends State<CourtAdminScreen> {
   bool _loaded = false;
+  int _courtIdx = 0;
+  String _tab = 'today';
 
   @override
   void initState() {
@@ -4483,25 +4708,54 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
     loadCatalog().then((_) { if (mounted) setState(() => _loaded = true); });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final title = Row(children: [
-      Icon(Icons.shield_outlined, color: accentAmber, size: 20),
-      const SizedBox(width: 8),
-      Semantics(
+  Widget _title(String text) => Semantics(
         identifier: 'court_admin_screen',
         container: true,
-        child: Text(tr('ניהול מגרשים', 'COURT ADMIN'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+        child: Text(text, style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+      );
+
+  Widget _navItem(String id, IconData icon, String label) {
+    final sel = _tab == id;
+    return Expanded(
+      child: Semantics(
+        identifier: 'admin_tab_$id',
+        button: true,
+        selected: sel,
+        container: true,
+        child: InkWell(
+          onTap: () => setState(() => _tab = id),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                decoration: BoxDecoration(
+                  color: sel ? accentGreen.withValues(alpha: 0.15) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(icon, size: 24, color: sel ? accentGreen : textSecondary),
+              ),
+              const SizedBox(height: 3),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, fontWeight: sel ? FontWeight.w800 : FontWeight.w600, color: sel ? accentGreen : textSecondary)),
+            ]),
+          ),
+        ),
       ),
-    ]);
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     if (!_loaded) {
-      return Scaffold(backgroundColor: bgColor, appBar: AdminAppBar(title: title), body: appLoading());
+      return Scaffold(backgroundColor: bgColor, appBar: AdminAppBar(title: _title(tr('ניהול המגרש', 'MY COURT'))), body: appLoading());
     }
     final courts = allStadiums.where((s) => widget.stadiumIds.contains(s['id'])).toList();
     if (courts.isEmpty) {
       return Scaffold(
         backgroundColor: bgColor,
-        appBar: AdminAppBar(title: title),
+        appBar: AdminAppBar(title: _title(tr('ניהול המגרש', 'MY COURT'))),
         body: appEmptyState(
           icon: Icons.sports_tennis,
           title: tr('אין מגרשים פעילים', 'No active courts'),
@@ -4509,31 +4763,524 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
         ),
       );
     }
-    return DefaultTabController(
-      length: courts.length,
-      child: Scaffold(
-        backgroundColor: bgColor,
-        appBar: AdminAppBar(
-          title: title,
-          bottom: TabBar(
-            isScrollable: courts.length > 3,
-            indicatorColor: accentGreen,
-            labelColor: accentGreen,
-            unselectedLabelColor: textSecondary,
-            tabs: [for (final c in courts) Tab(text: c['name'] as String)],
-          ),
-        ),
-        body: TabBarView(children: [
-          for (final c in courts)
-            AdminStadiumTab(
-              stadiumName: c['name'] as String,
-              stadiumId: c['id'] as String,
-              price: (c['price'] as int?) ?? 0,
-              limitedTools: true,
+    if (_courtIdx >= courts.length) _courtIdx = 0;
+    final court = courts[_courtIdx];
+    final id = court['id'] as String;
+    final name = court['name'] as String;
+    final price = (court['price'] as num?)?.round() ?? 0;
+    final venue = venueForStadium(id);
+    final hasSchool = venue?['hasTraining'] == true;
+    if (_tab == 'school' && !hasSchool) _tab = 'today';
+
+    final Widget body;
+    switch (_tab) {
+      case 'schedule':
+        body = AdminStadiumTab(key: ValueKey('sched_$id'), stadiumName: name, stadiumId: id, price: price, limitedTools: true, mode: AdminTabMode.schedule);
+        break;
+      case 'requests':
+        body = FixedRequestsAdminView(key: ValueKey('req_$id'), court: court);
+        break;
+      case 'school':
+        body = SchoolAdminView(key: ValueKey('school_$id'), court: court, venue: venue!);
+        break;
+      case 'reports':
+        body = AdminStadiumTab(key: ValueKey('rep_$id'), stadiumName: name, stadiumId: id, price: price, limitedTools: true, mode: AdminTabMode.reports);
+        break;
+      default:
+        body = CourtTodayView(key: ValueKey('today_$id'), court: court, onOpenRequests: () => setState(() => _tab = 'requests'));
+    }
+
+    return Scaffold(
+      backgroundColor: bgColor,
+      appBar: AdminAppBar(title: _title((venue?['name'] as String?) ?? tr('ניהול המגרש', 'MY COURT'))),
+      body: Column(children: [
+        if (courts.length > 1)
+          SizedBox(
+            height: 56,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: spaceMd, vertical: 8),
+              children: [
+                for (var i = 0; i < courts.length; i++)
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(end: 8),
+                    child: Semantics(
+                      identifier: 'admin_court_${courts[i]['id']}',
+                      button: true,
+                      selected: i == _courtIdx,
+                      container: true,
+                      child: ChoiceChip(
+                        selected: i == _courtIdx,
+                        onSelected: (_) => setState(() => _courtIdx = i),
+                        avatar: Icon(sportIcon(sportOf(courts[i])), size: 16, color: i == _courtIdx ? bgColor : accentGreen),
+                        label: Text(courts[i]['name'] as String),
+                        showCheckmark: false,
+                        labelStyle: TextStyle(color: i == _courtIdx ? bgColor : textPrimary, fontWeight: FontWeight.w800),
+                        selectedColor: accentGreen,
+                        backgroundColor: cardColor,
+                        side: BorderSide(color: i == _courtIdx ? accentGreen : borderColor),
+                      ),
+                    ),
+                  ),
+              ],
             ),
+          ),
+        Expanded(child: body),
+      ]),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(color: cardColor, border: Border(top: BorderSide(color: borderColor))),
+        child: SafeArea(
+          top: false,
+          child: Row(children: [
+            _navItem('today', Icons.today_rounded, tr('היום', 'Today')),
+            _navItem('schedule', Icons.calendar_month_rounded, tr('לוח שעות', 'Schedule')),
+            _navItem('requests', Icons.event_repeat_rounded, tr('בקשות', 'Requests')),
+            if (hasSchool) _navItem('school', Icons.school_rounded, tr('בית ספר', 'School')),
+            _navItem('reports', Icons.bar_chart_rounded, tr('דוחות', 'Reports')),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Today": how many bookings and how much income, then each booking with
+/// buttons to call or message the player.
+class CourtTodayView extends StatelessWidget {
+  final Map<String, dynamic> court;
+  final VoidCallback onOpenRequests;
+  const CourtTodayView({super.key, required this.court, required this.onOpenRequests});
+
+  Widget _bookingTile(BuildContext context, QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final b = d.data();
+    final phone = (b['phone'] as String? ?? '').trim();
+    final userName = (b['userName'] as String? ?? '').trim();
+    final players = ((b['players'] as List?) ?? const []).length;
+    return Semantics(
+      identifier: 'admin_today_booking_${d.id}',
+      container: true,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: spaceSm),
+        padding: const EdgeInsets.all(spaceSm),
+        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: borderColor)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusMd)),
+              child: Text((b['time'] as String?) ?? '', textDirection: TextDirection.ltr,
+                style: TextStyle(color: accentGreen, fontSize: 15, fontWeight: FontWeight.w900)),
+            ),
+            const SizedBox(width: spaceSm),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(userName.isEmpty ? tr('ללא שם', 'No name') : userName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 2),
+                Text('$players ${tr('שחקנים', 'players')}${phone.isNotEmpty ? ' · $phone' : ''}',
+                  style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: spaceSm),
+          Row(children: [
+            if (phone.isNotEmpty) ...[
+              Expanded(child: _adminActionButton('admin_call_${d.id}', Icons.call, tr('התקשר', 'Call'), accentGreen,
+                () => openExternalLink(context, Uri(scheme: 'tel', path: phone)))),
+              const SizedBox(width: spaceXs),
+              Expanded(child: _adminActionButton('admin_whatsapp_${d.id}', Icons.chat, 'WhatsApp', const Color(0xFF25D366),
+                () => sendWhatsApp(context,
+                  tr('שלום $userName, לגבי ההזמנה שלך היום ב-${b['time']} ב-${b['stadiumName']}',
+                     'Hi $userName, about your booking today at ${b['time']} at ${b['stadiumName']}'),
+                  phone: phone))),
+              const SizedBox(width: spaceXs),
+            ],
+            Expanded(child: _adminActionButton('admin_details_${d.id}', Icons.info_outline, tr('פרטים', 'Details'), textSecondary,
+              () => showBookingDetails(context, b, isAdmin: true, docId: d.id))),
+          ]),
         ]),
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = court['id'] as String;
+    final name = court['name'] as String;
+    final price = (court['price'] as num?)?.round() ?? 0;
+    final now = DateTime.now();
+    final today = dateKeyOf(now);
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('bookings')
+          .where('stadiumName', isEqualTo: name)
+          .where('date', isEqualTo: today)
+          .snapshots(),
+      builder: (ctx, snap) {
+        final docs = [...(snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[])]
+          ..sort((a, b) => ((a.data()['time'] as String?) ?? '').compareTo((b.data()['time'] as String?) ?? ''));
+        final income = docs.fold<int>(0, (s, d) => s + bookingAmount(d.data()));
+        return ListView(padding: const EdgeInsets.all(spaceMd), children: [
+          Text('${tr('היום', 'Today')} · ${hebrewWeekday(now.weekday, isHebrew)} $today',
+            style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900)),
+          Text(name, style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: spaceMd),
+          Row(children: [
+            Expanded(child: _adminStatTile('${docs.length}', tr('הזמנות היום', 'Bookings today'), Icons.event_available, accentGreen)),
+            const SizedBox(width: spaceSm),
+            Expanded(child: _adminStatTile('₪$income', tr('הכנסה היום', 'Income today'), Icons.payments_outlined, colorInfo)),
+          ]),
+          const SizedBox(height: spaceMd),
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance.collection('fixed_requests').where('stadiumId', isEqualTo: id).snapshots(),
+            builder: (ctx, rSnap) {
+              final pending = (rSnap.data?.docs ?? const []).where((d) => d.data()['status'] == 'pending').length;
+              if (pending == 0) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(bottom: spaceMd),
+                child: Semantics(
+                  identifier: 'admin_pending_requests',
+                  button: true,
+                  container: true,
+                  child: Material(
+                    color: colorWarning.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(radiusLg),
+                    child: InkWell(
+                      onTap: onOpenRequests,
+                      borderRadius: BorderRadius.circular(radiusLg),
+                      child: Padding(
+                        padding: const EdgeInsets.all(spaceSm),
+                        child: Row(children: [
+                          Icon(Icons.notifications_active_outlined, color: colorWarning),
+                          const SizedBox(width: spaceSm),
+                          Expanded(child: Text(
+                            tr('$pending בקשות לשעה קבועה מחכות לתשובה שלך', '$pending fixed-slot requests are waiting for you'),
+                            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w800))),
+                          Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: colorWarning),
+                        ]),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          appPrimaryButton(
+            label: tr('הוספת הזמנה', 'Add a booking'),
+            icon: Icons.add_circle_outline,
+            identifier: 'admin_add_booking',
+            onPressed: () => showManualBookingDialog(context, name, id, price),
+          ),
+          const SizedBox(height: 4),
+          Text(tr('למשל כשמישהו מזמין בטלפון', 'For example when someone books by phone'),
+            textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 12)),
+          const SizedBox(height: spaceLg),
+          appSectionTitle(tr('ההזמנות של היום', "TODAY'S BOOKINGS")),
+          if (!snap.hasData)
+            appLoading()
+          else if (docs.isEmpty)
+            appEmptyState(
+              icon: Icons.event_busy_outlined,
+              title: tr('אין הזמנות היום', 'No bookings today'),
+              subtitle: tr('הזמנות חדשות יופיעו כאן לבד', 'New bookings show up here by themselves'),
+            )
+          else
+            for (final d in docs) _bookingTile(context, d),
+        ]);
+      },
+    );
+  }
+}
+
+/// "Requests": players ask for the same time every week; the admin approves
+/// (it becomes a weekly fixed slot) or declines. Below, the fixed slots.
+class FixedRequestsAdminView extends StatelessWidget {
+  final Map<String, dynamic> court;
+  const FixedRequestsAdminView({super.key, required this.court});
+
+  void _toast(BuildContext context, String msg, {bool error = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: error ? colorError : accentGreen));
+  }
+
+  Future<void> _decide(BuildContext context, QueryDocumentSnapshot<Map<String, dynamic>> d, bool approve) async {
+    final r = d.data();
+    final db = FirebaseFirestore.instance;
+    final day = (r['dayOfWeek'] as int?) ?? 0;
+    final dayName = isHebrew ? trainingDayNames[day] : trainingDayNamesEn[day];
+    try {
+      if (approve) {
+        final existing = await db.collection('recurring_blocks').where('stadiumId', isEqualTo: r['stadiumId']).get();
+        final clash = existing.docs.any((x) =>
+            (x.data()['active'] ?? true) == true && x.data()['dayOfWeek'] == day && x.data()['time'] == r['time']);
+        if (clash) {
+          if (context.mounted) _toast(context, tr('השעה הזאת כבר קבועה למישהו אחר', 'This time is already someone else\'s fixed slot'), error: true);
+          return;
+        }
+        await db.collection('recurring_blocks').add({
+          'stadiumId': r['stadiumId'],
+          'stadiumName': r['stadiumName'],
+          'dayOfWeek': day,
+          'dayName': trainingDayNames[day],
+          'time': r['time'],
+          'reason': ((r['userName'] as String?) ?? '').isEmpty ? tr('קבוע', 'Fixed') : r['userName'],
+          'weeks': -1,
+          'createdAt': DateTime.now().toIso8601String(),
+          'active': true,
+          'requestId': d.id,
+          'userId': r['userId'],
+          'phone': r['phone'],
+        });
+      }
+      await d.reference.update({'status': approve ? 'approved' : 'declined', 'decidedAt': DateTime.now().toIso8601String()});
+      try {
+        await db.collection('notifications').add({
+          'userId': r['userId'],
+          'title': approve
+              ? tr('השעה הקבועה שלך אושרה ✅', 'Your fixed slot was approved ✅')
+              : tr('הבקשה לשעה קבועה לא אושרה', 'Your fixed-slot request was declined'),
+          'body': tr('${r['stadiumName']} · כל יום $dayName · ${r['time']}', '${r['stadiumName']} · every $dayName · ${r['time']}'),
+          'read': false,
+          'createdAt': DateTime.now().toIso8601String(),
+        });
+      } catch (_) {/* the decision is saved either way */}
+      if (context.mounted) {
+        _toast(context, approve ? tr('אושר. השעה שמורה לו כל שבוע ✓', 'Approved. The slot is theirs every week ✓') : tr('הבקשה נדחתה', 'Request declined'));
+      }
+    } catch (e) {
+      if (context.mounted) showAppError(context, e);
+    }
+  }
+
+  Future<void> _cancelFixed(BuildContext context, String docId, String label) async {
+    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+      backgroundColor: cardColor,
+      title: Text(tr('לבטל את השעה הקבועה?', 'Cancel this fixed slot?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold)),
+      content: Text(label, style: TextStyle(color: textSecondary)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('השאר', 'Keep'), style: TextStyle(color: textSecondary))),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('בטל שעה קבועה', 'Cancel it'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold))),
+      ],
+    ));
+    if (ok != true) return;
+    try {
+      await FirebaseFirestore.instance.collection('recurring_blocks').doc(docId).delete();
+      if (context.mounted) _toast(context, tr('השעה הקבועה בוטלה', 'Fixed slot cancelled'));
+    } catch (e) {
+      if (context.mounted) showAppError(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = court['id'] as String;
+    String dayLabel(Object? d) {
+      final i = (d as int?) ?? 0;
+      return isHebrew ? 'כל יום ${trainingDayNames[i]}' : 'Every ${trainingDayNamesEn[i]}';
+    }
+    return ListView(padding: const EdgeInsets.all(spaceMd), children: [
+      _adminHint(tr('שחקנים יכולים לבקש את אותה שעה כל שבוע. כשאתה מאשר, השעה נשמרת להם קבוע ואף אחד אחר לא יכול להזמין אותה.',
+          'Players can ask for the same time every week. When you approve, that time is kept for them and nobody else can book it.')),
+      const SizedBox(height: spaceMd),
+      appSectionTitle(tr('בקשות חדשות', 'NEW REQUESTS')),
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('fixed_requests').where('stadiumId', isEqualTo: id).snapshots(),
+        builder: (ctx, snap) {
+          if (snap.hasError) return Text(tr('לא הצלחנו לטעון בקשות', "Couldn't load requests"), style: TextStyle(color: colorError));
+          if (!snap.hasData) return appLoading();
+          final pending = snap.data!.docs.where((d) => d.data()['status'] == 'pending').toList()
+            ..sort((a, b) => ((a.data()['createdAt'] as String?) ?? '').compareTo((b.data()['createdAt'] as String?) ?? ''));
+          if (pending.isEmpty) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: spaceMd),
+              child: Text(tr('אין בקשות חדשות', 'No new requests'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary)),
+            );
+          }
+          return Column(children: [
+            for (final d in pending)
+              Semantics(
+                identifier: 'fixed_request_${d.id}',
+                container: true,
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: spaceSm),
+                  padding: const EdgeInsets.all(spaceSm),
+                  decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: Colors.purple.withValues(alpha: 0.35))),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Text((d.data()['userName'] as String?)?.isNotEmpty == true ? d.data()['userName'] as String : tr('ללא שם', 'No name'),
+                      style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 2),
+                    Text('${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}',
+                      style: const TextStyle(color: Colors.purple, fontSize: 14, fontWeight: FontWeight.w800)),
+                    if (((d.data()['phone'] as String?) ?? '').isNotEmpty)
+                      Text(d.data()['phone'] as String, textDirection: TextDirection.ltr, textAlign: TextAlign.start,
+                        style: TextStyle(color: textSecondary, fontSize: 12)),
+                    if (((d.data()['note'] as String?) ?? '').isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text('"${d.data()['note']}"', style: TextStyle(color: textSecondary, fontSize: 13, fontStyle: FontStyle.italic)),
+                      ),
+                    const SizedBox(height: spaceSm),
+                    Row(children: [
+                      Expanded(child: _adminActionButton('fixed_approve_${d.id}', Icons.check_circle_outline, tr('אשר', 'Approve'), accentGreen,
+                        () => _decide(context, d, true))),
+                      const SizedBox(width: spaceXs),
+                      Expanded(child: _adminActionButton('fixed_decline_${d.id}', Icons.cancel_outlined, tr('דחה', 'Decline'), colorError,
+                        () => _decide(context, d, false))),
+                      if (((d.data()['phone'] as String?) ?? '').isNotEmpty) ...[
+                        const SizedBox(width: spaceXs),
+                        Expanded(child: _adminActionButton('fixed_call_${d.id}', Icons.call, tr('התקשר', 'Call'), textSecondary,
+                          () => openExternalLink(context, Uri(scheme: 'tel', path: d.data()['phone'] as String)))),
+                      ],
+                    ]),
+                  ]),
+                ),
+              ),
+          ]);
+        },
+      ),
+      const SizedBox(height: spaceLg),
+      appSectionTitle(tr('השעות הקבועות', 'FIXED SLOTS')),
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('recurring_blocks').where('stadiumId', isEqualTo: id).snapshots(),
+        builder: (ctx, snap) {
+          if (!snap.hasData) return appLoading();
+          final fixed = snap.data!.docs.where((d) => (d.data()['active'] ?? true) == true).toList()
+            ..sort((a, b) {
+              final c = ((a.data()['dayOfWeek'] as int?) ?? 0).compareTo((b.data()['dayOfWeek'] as int?) ?? 0);
+              return c != 0 ? c : ((a.data()['time'] as String?) ?? '').compareTo((b.data()['time'] as String?) ?? '');
+            });
+          if (fixed.isEmpty) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: spaceMd),
+              child: Text(tr('עוד אין שעות קבועות', 'No fixed slots yet'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary)),
+            );
+          }
+          return Column(children: [
+            for (final d in fixed)
+              Container(
+                margin: const EdgeInsets.only(bottom: spaceXs),
+                padding: const EdgeInsets.symmetric(horizontal: spaceSm, vertical: 6),
+                decoration: BoxDecoration(color: Colors.purple.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(radiusMd), border: Border.all(color: Colors.purple.withValues(alpha: 0.25))),
+                child: Row(children: [
+                  Icon(Icons.event_repeat, color: Colors.purple, size: 20),
+                  const SizedBox(width: spaceXs),
+                  Expanded(child: Text('${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}\n${d.data()['reason'] ?? ''}',
+                    style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4))),
+                  TextButton(
+                    onPressed: () => _cancelFixed(context, d.id, '${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}'),
+                    child: Text(tr('בטל', 'Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w800)),
+                  ),
+                ]),
+              ),
+          ]);
+        },
+      ),
+    ]);
+  }
+}
+
+/// "School": the parents' sign-up link to send, and the training groups.
+class SchoolAdminView extends StatelessWidget {
+  final Map<String, dynamic> court;
+  final Map<String, dynamic> venue;
+  const SchoolAdminView({super.key, required this.court, required this.venue});
+
+  @override
+  Widget build(BuildContext context) {
+    final venueName = (venue['name'] as String?) ?? '';
+    final link = schoolSignupLink(venue['id'] as String);
+    final message = tr('ההרשמה לבית הספר של $venueName פתוחה! ⚽\nלפרטים ולהרשמה: $link',
+        'Sign-up for the $venueName school is open! ⚽\nDetails and sign-up: $link');
+    return ListView(padding: const EdgeInsets.all(spaceMd), children: [
+      Container(
+        padding: const EdgeInsets.all(spaceMd),
+        decoration: BoxDecoration(
+          color: colorInfo.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(radiusXl),
+          border: Border.all(color: colorInfo.withValues(alpha: 0.35)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Icon(Icons.campaign_outlined, color: colorInfo, size: 28),
+            const SizedBox(width: spaceSm),
+            Expanded(child: Text(tr('קישור הרשמה להורים', 'Parents sign-up link'),
+              style: TextStyle(color: textPrimary, fontSize: 17, fontWeight: FontWeight.w900))),
+          ]),
+          const SizedBox(height: spaceXs),
+          Text(tr('שלח את הקישור בקבוצות הוואטסאפ של ההורים. ההורה לוחץ ומגיע ישר לקבוצות האימון ולהרשמה.',
+              "Send this link to the parents' WhatsApp groups. A parent taps it and lands right on the groups and sign-up."),
+            style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4)),
+          const SizedBox(height: spaceSm),
+          Container(
+            padding: const EdgeInsets.all(spaceSm),
+            decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusMd), border: Border.all(color: borderColor)),
+            child: SelectableText(link, textDirection: TextDirection.ltr, style: TextStyle(color: textPrimary, fontSize: 12)),
+          ),
+          const SizedBox(height: spaceSm),
+          Semantics(
+            identifier: 'school_link_whatsapp',
+            button: true,
+            container: true,
+            child: ElevatedButton.icon(
+              onPressed: () => sendWhatsApp(context, message),
+              icon: const Icon(Icons.chat),
+              label: Text(tr('שלח בוואטסאפ', 'Send on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF25D366),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+              ),
+            ),
+          ),
+          const SizedBox(height: spaceXs),
+          Row(children: [
+            Expanded(child: _adminActionButton('school_link_copy', Icons.link, tr('העתק קישור', 'Copy link'), colorInfo, () async {
+              await Clipboard.setData(ClipboardData(text: link));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('הקישור הועתק 📋', 'Link copied 📋')), backgroundColor: accentGreen));
+              }
+            })),
+            const SizedBox(width: spaceXs),
+            Expanded(child: _adminActionButton('school_link_share', Icons.share_outlined, tr('שתף', 'Share'), colorInfo, () async {
+              try {
+                await SharePlus.instance.share(ShareParams(text: message, subject: venueName));
+              } catch (_) {
+                await Clipboard.setData(ClipboardData(text: message));
+              }
+            })),
+          ]),
+        ]),
+      ),
+      const SizedBox(height: spaceMd),
+      Semantics(
+        identifier: 'school_groups_open',
+        button: true,
+        container: true,
+        child: Material(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(radiusXl),
+          child: InkWell(
+            onTap: () => navigateTo(context, TrainingGroupsAdminScreen(stadiumId: court['id'] as String, stadiumName: court['name'] as String)),
+            borderRadius: BorderRadius.circular(radiusXl),
+            child: Container(
+              padding: const EdgeInsets.all(spaceMd),
+              decoration: BoxDecoration(borderRadius: BorderRadius.circular(radiusXl), border: Border.all(color: borderColor)),
+              child: Row(children: [
+                Icon(Icons.groups_rounded, color: accentGreen, size: 30),
+                const SizedBox(width: spaceSm),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(tr('קבוצות האימון והנרשמים', 'Training groups & sign-ups'),
+                    style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 2),
+                  Text(tr('פתיחת קבוצה, ימים, שעות, מחיר, ומי נרשם', 'Open a group, days, hours, price, and who signed up'),
+                    style: TextStyle(color: textSecondary, fontSize: 12)),
+                ])),
+                Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: textSecondary),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ]);
   }
 }
 
@@ -5368,6 +6115,8 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                           _welcomeCard(),
                         ],
 
+                        const NextGameCard(),
+
                         if (isGuestUser) ...[
                           const SizedBox(height: spaceMd),
                           Semantics(
@@ -5889,6 +6638,68 @@ class SchoolsScreen extends StatelessWidget {
           ),
         ),
       ]),
+    );
+  }
+}
+
+/// Home reminder: the player's next game, today or tomorrow.
+class NextGameCard extends StatelessWidget {
+  const NextGameCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous) return const SizedBox.shrink();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('bookings').where('userId', isEqualTo: user.uid).snapshots(),
+      builder: (ctx, snap) {
+        final now = DateTime.now();
+        final until = DateTime(now.year, now.month, now.day + 2);
+        Map<String, dynamic>? next;
+        DateTime? nextStart;
+        for (final d in snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+          final s = bookingStart(d.data());
+          if (s == null || s.isBefore(now) || !s.isBefore(until)) continue;
+          if (nextStart == null || s.isBefore(nextStart)) {
+            next = d.data();
+            nextStart = s;
+          }
+        }
+        if (next == null || nextStart == null) return const SizedBox.shrink();
+        final isToday = nextStart.day == now.day && nextStart.month == now.month;
+        final hhmm = '${nextStart.hour.toString().padLeft(2, '0')}:${nextStart.minute.toString().padLeft(2, '0')}';
+        return Padding(
+          padding: const EdgeInsets.only(top: spaceMd),
+          child: Semantics(
+            identifier: 'next_game_card',
+            button: true,
+            container: true,
+            child: Material(
+              color: accentGreen.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(radiusLg),
+              child: InkWell(
+                onTap: () => openPlayerTab(context, 1),
+                borderRadius: BorderRadius.circular(radiusLg),
+                child: Padding(
+                  padding: const EdgeInsets.all(spaceSm),
+                  child: Row(children: [
+                    Icon(Icons.alarm, color: accentGreen, size: 28),
+                    const SizedBox(width: spaceSm),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(isToday ? tr('יש לך משחק היום ב-$hhmm ⚽', 'You have a game today at $hhmm ⚽')
+                                   : tr('יש לך משחק מחר ב-$hhmm ⚽', 'You have a game tomorrow at $hhmm ⚽'),
+                        style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 2),
+                      Text((next['stadiumName'] as String?) ?? '', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ])),
+                    Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: accentGreen),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -6629,6 +7440,126 @@ class _BookingScreenState extends State<BookingScreen> {
     ));
   }
 
+  Widget _fixedRequestCard() => Semantics(
+    identifier: 'fixed_request_open',
+    button: true,
+    container: true,
+    child: Material(
+      color: Colors.purple.withValues(alpha: 0.07),
+      borderRadius: BorderRadius.circular(radiusLg),
+      child: InkWell(
+        onTap: _requestFixedSlot,
+        borderRadius: BorderRadius.circular(radiusLg),
+        child: Container(
+          padding: const EdgeInsets.all(spaceSm),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: Colors.purple.withValues(alpha: 0.3))),
+          child: Row(children: [
+            const Icon(Icons.event_repeat, color: Colors.purple, size: 26),
+            const SizedBox(width: spaceSm),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('משחקים כל שבוע באותה שעה?', 'Play at the same time every week?'),
+                style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 2),
+              Text(tr('בקשו שעה קבועה, והמנהל יאשר', 'Ask for a fixed slot and the manager will approve'),
+                style: TextStyle(color: textSecondary, fontSize: 12)),
+            ])),
+            Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: Colors.purple),
+          ]),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _requestFixedSlot() async {
+    if (!await requireAccount(context) || !mounted) return;
+    final labels = _slots.map(_slotLabel).toList();
+    var day = _weekdayFromDateString(_days[_selDay]['date']!);
+    String? time;
+    final noteCtrl = TextEditingController();
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setS) => AlertDialog(
+        backgroundColor: cardColor,
+        title: Text(tr('בקשה לשעה קבועה', 'Fixed weekly slot'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(tr('באיזה יום?', 'Which day?'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (var i = 0; i < 7; i++)
+                ChoiceChip(
+                  selected: day == i,
+                  onSelected: (_) => setS(() => day = i),
+                  label: Text(isHebrew ? trainingDayNames[i] : trainingDayNamesEn[i]),
+                  showCheckmark: false,
+                  selectedColor: Colors.purple,
+                  labelStyle: TextStyle(color: day == i ? Colors.white : textPrimary, fontWeight: FontWeight.w700, fontSize: 12),
+                  backgroundColor: bgSecondary,
+                ),
+            ]),
+            const SizedBox(height: spaceMd),
+            Text(tr('באיזו שעה?', 'What time?'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final l in labels)
+                ChoiceChip(
+                  selected: time == l,
+                  onSelected: (_) => setS(() => time = l),
+                  label: Text(l, textDirection: TextDirection.ltr),
+                  showCheckmark: false,
+                  selectedColor: Colors.purple,
+                  labelStyle: TextStyle(color: time == l ? Colors.white : textPrimary, fontWeight: FontWeight.w700, fontSize: 12),
+                  backgroundColor: bgSecondary,
+                ),
+            ]),
+            const SizedBox(height: spaceMd),
+            appTextField(controller: noteCtrl, label: tr('הערה למנהל (לא חובה)', 'Note to the manager (optional)'), icon: Icons.notes),
+          ])),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+          Semantics(
+            identifier: 'fixed_request_send',
+            button: true,
+            container: true,
+            child: ElevatedButton(
+              onPressed: time == null ? null : () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, elevation: 0),
+              child: Text(tr('שלח בקשה', 'Send request'), style: const TextStyle(fontWeight: FontWeight.w900)),
+            ),
+          ),
+        ],
+      )),
+    );
+    if (send != true || time == null || !mounted) return;
+    try {
+      final user = FirebaseAuth.instance.currentUser!;
+      final profile = (await FirebaseFirestore.instance.collection('users').doc(user.uid).get()).data() ?? {};
+      final id = widget.stadium['id'] as String;
+      await FirebaseFirestore.instance.collection('fixed_requests').add({
+        'stadiumId': id,
+        'stadiumName': widget.stadium['name'],
+        'venueId': venueForStadium(id)?['id'],
+        'dayOfWeek': day,
+        'time': time,
+        'note': noteCtrl.text.trim(),
+        'userId': user.uid,
+        'userName': (profile['name'] as String?) ?? user.displayName ?? '',
+        'phone': (profile['phone'] as String?) ?? '',
+        'status': 'pending',
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('הבקשה נשלחה למנהל. תקבל הודעה כשהוא יענה 🔔', "Request sent. You'll get a notification when the manager answers 🔔")),
+        backgroundColor: accentGreen,
+      ));
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    }
+  }
+
   void _dlg(String t, String msg, {bool err = false}) => showDialog(context: context, builder: (_) => AlertDialog(
     backgroundColor: cardColor, title: Text(t, style: TextStyle(color: err?Colors.red:accentGreen, fontWeight: FontWeight.bold)),
     content: Text(msg, style: TextStyle(color: textSecondary)),
@@ -6821,6 +7752,8 @@ class _BookingScreenState extends State<BookingScreen> {
                           const SizedBox(height: spaceMd),
                           appLoading(message: tr('מבצע הזמנה...', 'Booking...')),
                         ],
+                        const SizedBox(height: spaceLg),
+                        _fixedRequestCard(),
                       ],
                     ),
                   ),
@@ -8163,7 +9096,9 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
 // ==================== TRAINING REGISTRATIONS (ADMIN) ====================
 class TrainingRegistrationsScreen extends StatefulWidget {
   final String groupId, groupName;
-  const TrainingRegistrationsScreen({super.key, required this.groupId, required this.groupName});
+  /// Court admins may only list their own courts' registrations (rules).
+  final String? stadiumId;
+  const TrainingRegistrationsScreen({super.key, required this.groupId, required this.groupName, this.stadiumId});
   @override State<TrainingRegistrationsScreen> createState() => _TrainingRegistrationsScreenState();
 }
 
@@ -8388,7 +9323,10 @@ class _TrainingRegistrationsScreenState extends State<TrainingRegistrationsScree
         ),
       ),
       body: StreamBuilder(
-        stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: widget.groupId).snapshots(),
+        stream: (widget.stadiumId == null
+                ? FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: widget.groupId)
+                : FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: widget.groupId).where('stadiumId', isEqualTo: widget.stadiumId))
+            .snapshots(),
         builder: (ctx, snap) {
           if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
           final docs      = snap.data!.docs;
@@ -8585,7 +9523,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
       ],
     ));
     if (ok != true) return;
-    final regs = await FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: docId).get();
+    final regs = await FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: docId).where('stadiumId', isEqualTo: stadiumId).get();
     final batch = FirebaseFirestore.instance.batch();
     for (final d in regs.docs) batch.delete(d.reference);
     batch.delete(FirebaseFirestore.instance.collection('training_groups').doc(docId));
@@ -8638,7 +9576,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
                     Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                       Text('₪${g['price']} $priceLabel', style: const TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 13)),
                       StreamBuilder(
-                        stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: doc.id).snapshots(),
+                        stream: FirebaseFirestore.instance.collection('training_registrations').where('groupId', isEqualTo: doc.id).where('stadiumId', isEqualTo: stadiumId).snapshots(),
                         builder: (_, rs) {
                           final count = rs.data?.docs.length ?? 0;
                           final cap   = g['capacity'] as int? ?? 0;
@@ -8661,7 +9599,7 @@ class TrainingGroupsAdminScreen extends StatelessWidget {
                 ])),
                 Padding(padding: const EdgeInsets.fromLTRB(10, 4, 10, 10), child: Row(children: [
                   Expanded(child: TextButton.icon(
-                    onPressed: () => navigateTo(context, TrainingRegistrationsScreen(groupId: doc.id, groupName: groupDisplayName)),
+                    onPressed: () => navigateTo(context, TrainingRegistrationsScreen(groupId: doc.id, groupName: groupDisplayName, stadiumId: stadiumId)),
                     icon: const Icon(Icons.people_outline, size: 15, color: Colors.blue),
                     label: Text(tr('נרשמים', 'Reg.'), style: const TextStyle(color: Colors.blue, fontSize: 11)),
                     style: TextButton.styleFrom(backgroundColor: Colors.blue.withValues(alpha: 0.07), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
