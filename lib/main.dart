@@ -22,35 +22,15 @@ bool isHebrew = true;
 String tr(String he, String en) => isHebrew ? he : en;
 
 // ==================== CONFIG ====================
-const String superAdminEmail    = 'admin@gmail.com';
-const String md9AdminEmail      = 'admin.md9@gmail.com';
-const String yStadiumAdminEmail = 'admin.ystadium@gmail.com';
-
 /// Hard-coded fallback contact email shown on the Contact screen when the
 /// `app_config/contact` doc is missing, empty, or unreadable.
 const String kDefaultContactEmail = 'MANSOURSHADY69@gmail.com';
 
-// `final` (not const) so demo courts can be appended when ?demo=1.
-final List<Map<String, dynamic>> allStadiums = [
-  {'id': 'md9_main',  'name': 'SM MAIN',   'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
-  {'id': 'md9_2',     'name': 'SM 2',      'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': md9AdminEmail},
-  {'id': 'y_stadium', 'name': 'X STADIUM', 'type': 'Football', 'price': 300, 'pricePerHour': 150, 'location': 'נצרת', 'admin': yStadiumAdminEmail},
-];
+/// Clubs and courts all come from the owner's screen (Firestore `venues` and
+/// `stadiums`, merged in by loadCatalog). Nothing is defined in code.
+final List<Map<String, dynamic>> allStadiums = [];
 
-final List<Map<String, dynamic>> venues = [
-  {
-    'id': 'md9', 'name': 'SM', 'nameEn': 'SM',
-    'region': 'נצרת', 'regionEn': 'Nazareth',
-    'description': 'מרכז כדורגל מקצועי בנצרת', 'descriptionEn': 'Professional football center in Nazareth',
-    'color': 'green', 'stadiumIds': ['md9_main', 'md9_2'], 'hasTraining': true,
-  },
-  {
-    'id': 'y_stadium', 'name': 'X STADIUM', 'nameEn': 'X STADIUM',
-    'region': 'נצרת', 'regionEn': 'Nazareth',
-    'description': 'אצטדיון כדורגל מקצועי בנצרת', 'descriptionEn': 'Professional football stadium in Nazareth',
-    'color': 'blue', 'stadiumIds': ['y_stadium'], 'hasTraining': false,
-  },
-];
+final List<Map<String, dynamic>> venues = [];
 
 Map<String, dynamic>? venueForStadium(String stadiumId) {
   for (final v in venues) {
@@ -167,46 +147,6 @@ List<Map<String, String>> defaultSlotsForStadium(Map<String, dynamic>? stadium) 
   );
 }
 
-// ==================== DEMO MODE ====================
-// Padel/tennis clubs are merged into `venues` / `allStadiums` for everyone at
-// startup (see main()). Their bookings keep the isDemo tag, and sample ones
-// are seeded by scripts/seed_demo.js.
-bool kDemoMode = false;
-
-const String demoAdminEmail = 'demo.admin@stadium-demo.app'; // reserved for the planned demo admin view
-
-final List<Map<String, dynamic>> demoStadiums = [
-  {'id': 'demo_padel_1',  'name': 'PADEL 1',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_padel_2',  'name': 'PADEL 2',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_padel_3',  'name': 'PADEL 3',  'type': kSportPadel,  'price': 240, 'pricePerHour': 160, 'location': 'חיפה', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '23:00', 'slotMinutes': 90},
-  {'id': 'demo_tennis_1', 'name': 'TENNIS 1', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'נצרת', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
-  {'id': 'demo_tennis_2', 'name': 'TENNIS 2', 'type': kSportTennis, 'price': 120, 'pricePerHour': 120, 'location': 'נצרת', 'admin': demoAdminEmail, 'isDemo': true, 'openTime': '07:00', 'closeTime': '22:00', 'slotMinutes': 60},
-];
-
-final List<Map<String, dynamic>> demoVenues = [
-  {
-    'id': 'demo_padel', 'name': 'Demo Padel Club', 'nameEn': 'Demo Padel Club',
-    'region': 'חיפה', 'regionEn': 'Haifa',
-    'description': 'מועדון פאדל לדוגמה — 3 מגרשים', 'descriptionEn': 'Sample padel club — 3 courts',
-    'color': 'orange', 'emoji': '🎾', 'isDemo': true,
-    'stadiumIds': ['demo_padel_1', 'demo_padel_2', 'demo_padel_3'], 'hasTraining': false,
-  },
-  {
-    'id': 'demo_tennis', 'name': 'Demo Tennis Club', 'nameEn': 'Demo Tennis Club',
-    'region': 'נצרת', 'regionEn': 'Nazareth',
-    'description': 'מועדון טניס לדוגמה — 2 מגרשים', 'descriptionEn': 'Sample tennis club — 2 courts',
-    'color': 'purple', 'emoji': '🎾', 'isDemo': true,
-    'stadiumIds': ['demo_tennis_1', 'demo_tennis_2'], 'hasTraining': false,
-  },
-];
-
-void enableDemoVenues() {
-  if (kDemoMode) return;
-  kDemoMode = true;
-  allStadiums.addAll(demoStadiums);
-  venues.addAll(demoVenues);
-}
-
 // ==================== COURT CATALOG & ROLES ====================
 // Owner of the whole app. Must match isOwner() in firestore.rules.
 const String kOwnerEmail = 'mansourshady69@gmail.com';
@@ -319,9 +259,6 @@ Map<String, dynamic> plainCourtType(Map<String, dynamic>? stadium) {
 Future<Widget> homeScreenForUser(User user) async {
   if (user.isAnonymous) return const PlayerShell();
   final email = user.email ?? '';
-  if (email == superAdminEmail) return const SuperAdminScreen();
-  if (email == md9AdminEmail) return const MD9AdminScreen();
-  if (email == yStadiumAdminEmail) return const SingleAdminScreen(stadiumId: 'y_stadium');
 
   final lower = email.toLowerCase();
   try {
@@ -2058,8 +1995,6 @@ void main() async {
   if (kIsWeb && Uri.base.queryParameters['e2e'] == '1') {
     SemanticsBinding.instance.ensureSemantics();
   }
-  // Padel/tennis clubs are shown to everyone, on web and in the native apps.
-  enableDemoVenues();
   if (kIsWeb) pendingJoinBookingId = Uri.base.queryParameters['join'];
   try {
     final prefs = await SharedPreferences.getInstance();
@@ -2132,7 +2067,7 @@ void toggleAppLanguage(BuildContext context) {
   StadiumApp.of(context)?.toggleLanguage();
 
   // markNeedsBuild on ancestors alone is not enough: any `const` child
-  // (e.g. `TabBarView(children: const [MD9OverviewTab(), ...])`) is
+  // (e.g. `TabBarView(children: const [SomeTab(), ...])`) is
   // identity-equal across rebuilds, so Flutter skips its build pass and
   // cached `tr()` strings stay stale until the user navigates.
   //
@@ -3502,409 +3437,6 @@ Widget _adminBookCard(Map<String,dynamic> b, {required String docId, required Bu
   );
 }
 
-// ==================== MD9 ADMIN ====================
-class MD9AdminScreen extends StatefulWidget {
-  const MD9AdminScreen({super.key});
-  @override State<MD9AdminScreen> createState() => _MD9AdminScreenState();
-}
-class _MD9AdminScreenState extends State<MD9AdminScreen> with SingleTickerProviderStateMixin {
-  late TabController _tab;
-  @override void initState() { super.initState(); _tab = TabController(length: 3, vsync: this); }
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: bgColor,
-    appBar: AdminAppBar(
-      title: Row(children: [
-        Icon(Icons.shield_outlined, color: accentAmber, size: 20),
-        const SizedBox(width: 8),
-        Text(tr('אדמין SM', 'SM ADMIN'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
-      ]),
-      bottom: TabBar(controller: _tab, indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
-        tabs: [Tab(text: tr('סקירה', 'DASHBOARD')), const Tab(text: 'SM MAIN'), const Tab(text: 'SM 2')]),
-    ),
-    body: TabBarView(controller: _tab, children: const [
-      MD9OverviewTab(),
-      AdminStadiumTab(stadiumName: 'SM MAIN', stadiumId: 'md9_main', price: 300),
-      AdminStadiumTab(stadiumName: 'SM 2',    stadiumId: 'md9_2',    price: 300),
-    ]),
-  );
-}
-
-class MD9OverviewTab extends StatelessWidget {
-  const MD9OverviewTab({super.key});
-
-  static int _priceOf(Map<String, dynamic> b) =>
-      int.tryParse((b['price'] as String? ?? '0').split('/').first.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-
-  static DateTime? _parseBookingDateTime(Map<String, dynamic> b, DateTime now) {
-    try {
-      final dateParts = (b['date'] as String).split('/');
-      final timeStr = (b['time'] as String? ?? '').split(' - ').first.trim();
-      final hh = int.parse(timeStr.split(':')[0]);
-      final mm = int.parse(timeStr.split(':')[1]);
-      return DateTime(now.year, int.parse(dateParts[1]), int.parse(dateParts[0]), hh, mm);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', whereIn: ['SM MAIN', 'SM 2']).snapshots(),
-      builder: (context, snap) {
-        if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
-
-        final now = DateTime.now();
-        final todayStr = '${now.day}/${now.month}';
-        final weekAgo = now.subtract(const Duration(days: 7));
-
-        final docs = snap.data!.docs;
-        final allBookings = docs.map((d) => d.data()).toList();
-
-        // ---- Today aggregates (cross-stadium) ----
-        int todayBookings = 0, todayPlayers = 0, todayRevenue = 0;
-        // Per-stadium today
-        final perStadium = <String, Map<String, int>>{
-          'SM MAIN': {'b': 0, 'p': 0, 'r': 0},
-          'SM 2':    {'b': 0, 'p': 0, 'r': 0},
-        };
-        // ---- Week aggregates ----
-        int weekBookings = 0, weekRevenue = 0;
-        // ---- Upcoming bookings (next 24h) ----
-        final upcoming = <Map<String, dynamic>>[];
-
-        for (final b in allBookings) {
-          final stadium = b['stadiumName'] as String? ?? '';
-          final players = ((b['players'] as List?) ?? []).length;
-          final price = _priceOf(b);
-          final bd = _parseBookingDateTime(b, now);
-
-          if (b['date'] == todayStr) {
-            todayBookings++;
-            todayPlayers += players;
-            todayRevenue += price;
-            final ps = perStadium[stadium];
-            if (ps != null) {
-              ps['b'] = ps['b']! + 1;
-              ps['p'] = ps['p']! + players;
-              ps['r'] = ps['r']! + price;
-            }
-          }
-
-          if (bd != null && bd.isAfter(weekAgo) && bd.isBefore(now.add(const Duration(days: 1)))) {
-            weekBookings++;
-            weekRevenue += price;
-          }
-
-          if (bd != null && bd.isAfter(now) && bd.isBefore(now.add(const Duration(hours: 24)))) {
-            upcoming.add(b);
-          }
-        }
-
-        upcoming.sort((a, b) {
-          final da = _parseBookingDateTime(a, now);
-          final db = _parseBookingDateTime(b, now);
-          if (da == null || db == null) return 0;
-          return da.compareTo(db);
-        });
-
-        // Estimated capacity for occupancy: 2 stadiums × 8 default slots = 16
-        const capacityToday = 16;
-        final occupancyPct = capacityToday == 0 ? 0 : ((todayBookings / capacityToday) * 100).round();
-
-        return ListView(padding: const EdgeInsets.all(16), children: [
-          // ===== HERO: Today's headline =====
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [accentGreen.withValues(alpha: 0.18), accentGreen.withValues(alpha: 0.04)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(radiusXl),
-              border: Border.all(color: accentGreen.withValues(alpha: 0.25)),
-            ),
-            child: Row(children: [
-              Container(
-                width: 48, height: 48,
-                decoration: BoxDecoration(
-                  color: accentGreen.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.dashboard_rounded, color: accentGreen, size: 26),
-              ),
-              const SizedBox(width: spaceMd),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(
-                    tr('סקירה כללית', 'OVERVIEW'),
-                    style: TextStyle(color: accentGreen, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: isHebrew ? 0 : 2),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${tr('היום', 'Today')} • $todayStr',
-                    style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
-                  ),
-                ]),
-              ),
-            ]),
-          ),
-          const SizedBox(height: spaceMd),
-
-          // ===== KPIs grid (2x2) =====
-          Row(children: [
-            Expanded(child: _kpi(tr('הזמנות היום', 'BOOKINGS'), '$todayBookings', Icons.calendar_today_rounded, accentGreen)),
-            const SizedBox(width: spaceSm),
-            Expanded(child: _kpi(tr('הכנסות היום', 'REVENUE'), '₪$todayRevenue', Icons.payments_rounded, accentAmber)),
-          ]),
-          const SizedBox(height: spaceSm),
-          Row(children: [
-            Expanded(child: _kpi(tr('שחקנים', 'PLAYERS'), '$todayPlayers', Icons.people_rounded, Colors.blue)),
-            const SizedBox(width: spaceSm),
-            Expanded(child: _kpi(tr('תפוסה', 'OCCUPANCY'), '$occupancyPct%', Icons.donut_large_rounded, Colors.purple)),
-          ]),
-
-          const SizedBox(height: spaceLg),
-
-          // ===== Per-stadium snapshot =====
-          _secTitle(tr('פעילות לפי מגרש — היום', 'BY STADIUM — TODAY')),
-          const SizedBox(height: spaceSm),
-          _stadiumCard('SM MAIN', perStadium['SM MAIN']!),
-          const SizedBox(height: spaceXs),
-          _stadiumCard('SM 2', perStadium['SM 2']!),
-
-          const SizedBox(height: spaceLg),
-
-          // ===== Week summary =====
-          _secTitle(tr('שבוע אחרון', 'LAST 7 DAYS')),
-          const SizedBox(height: spaceSm),
-          Container(
-            padding: const EdgeInsets.all(spaceMd),
-            decoration: BoxDecoration(
-              color: cardColor,
-              borderRadius: BorderRadius.circular(radiusLg),
-              border: Border.all(color: borderColor),
-            ),
-            child: IntrinsicHeight(
-              child: Row(children: [
-                Expanded(child: appStatCell('$weekBookings', tr('הזמנות', 'BOOKINGS'))),
-                Container(width: 1, color: borderColor),
-                Expanded(child: appStatCell('₪$weekRevenue', tr('הכנסות', 'REVENUE'))),
-                Container(width: 1, color: borderColor),
-                Expanded(child: appStatCell(
-                  weekBookings == 0 ? '₪0' : '₪${(weekRevenue / weekBookings).round()}',
-                  tr('ממוצע', 'AVG'),
-                )),
-              ]),
-            ),
-          ),
-
-          const SizedBox(height: spaceLg),
-
-          // ===== Upcoming bookings (next 24h) =====
-          Row(children: [
-            _secTitle(tr('הזמנות קרובות (24 שעות)', 'UPCOMING (NEXT 24H)')),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: accentGreen.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(radiusXs),
-              ),
-              child: Text('${upcoming.length}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900, fontSize: 12)),
-            ),
-          ]),
-          const SizedBox(height: spaceSm),
-          if (upcoming.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: cardColor,
-                borderRadius: BorderRadius.circular(radiusLg),
-                border: Border.all(color: borderColor),
-              ),
-              child: Row(children: [
-                Icon(Icons.event_busy_outlined, color: textSecondary, size: 24),
-                const SizedBox(width: spaceSm),
-                Expanded(child: Text(tr('אין הזמנות ב-24 השעות הקרובות', 'No bookings in the next 24 hours'), style: TextStyle(color: textSecondary, fontSize: 13))),
-              ]),
-            )
-          else
-            ...upcoming.take(8).map((b) => _upcomingTile(b, now)),
-
-          const SizedBox(height: spaceLg),
-
-          // ===== Venue customization =====
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => navigateTo(context, const VenueImageScreen(venueId: 'md9', venueName: 'SM')),
-              icon: const Icon(Icons.image_outlined, size: 18, color: Colors.purple),
-              label: Text(
-                tr('תמונת רקע למתחם SM', 'SM Venue Background Image'),
-                style: const TextStyle(color: Colors.purple, fontSize: 13, fontWeight: FontWeight.w800),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: Colors.purple.withValues(alpha: 0.4)),
-                backgroundColor: cardColor,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
-              ),
-            ),
-          ),
-          const SizedBox(height: spaceSm),
-
-          // ===== Export action =====
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => exportToCSV(context, allBookings, 'md9_bookings'),
-              icon: Icon(Icons.download_outlined, size: 18, color: accentGreen),
-              label: Text(
-                tr('ייצוא כל הזמנות SM', 'Export All SM Bookings'),
-                style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w800),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: accentGreen.withValues(alpha: 0.4)),
-                backgroundColor: cardColor,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
-              ),
-            ),
-          ),
-        ]);
-      },
-    );
-  }
-
-  Widget _kpi(String label, String value, IconData icon, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(spaceMd),
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(radiusLg),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Container(
-              width: 32, height: 32,
-              decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
-              child: Icon(icon, color: color, size: 18),
-            ),
-            const Spacer(),
-          ]),
-          const SizedBox(height: spaceSm),
-          Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w900), maxLines: 1, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 2),
-          Text(label, style: TextStyle(color: textSecondary, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: isHebrew ? 0 : 1.5), maxLines: 1, overflow: TextOverflow.ellipsis),
-        ],
-      ),
-    );
-  }
-
-  Widget _stadiumCard(String name, Map<String, int> stats) {
-    final b = stats['b']!;
-    final p = stats['p']!;
-    final r = stats['r']!;
-    return Container(
-      padding: const EdgeInsets.all(spaceMd),
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(radiusLg),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(children: [
-        Container(
-          width: 40, height: 40,
-          decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
-          child: Icon(Icons.sports_soccer_rounded, color: accentGreen, size: 22),
-        ),
-        const SizedBox(width: spaceSm),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(name, style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 1)),
-              const SizedBox(height: 4),
-              Row(children: [
-                Icon(Icons.calendar_today_outlined, color: textSecondary, size: 12),
-                const SizedBox(width: 4),
-                Text('$b', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-                const SizedBox(width: 12),
-                Icon(Icons.people_outline, color: textSecondary, size: 12),
-                const SizedBox(width: 4),
-                Text('$p', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-              ]),
-            ],
-          ),
-        ),
-        Text('₪$r', style: TextStyle(color: accentGreen, fontSize: 16, fontWeight: FontWeight.w900)),
-      ]),
-    );
-  }
-
-  Widget _upcomingTile(Map<String, dynamic> b, DateTime now) {
-    final stadium = b['stadiumName'] as String? ?? '';
-    final time    = b['time']        as String? ?? '';
-    final user    = b['userName']    as String? ?? '';
-    final phone   = b['phone']       as String? ?? '';
-    final dt      = _parseBookingDateTime(b, now);
-    final isToday = dt != null && dt.year == now.year && dt.month == now.month && dt.day == now.day;
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: spaceSm + 2, vertical: spaceSm),
-      decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(radiusMd),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: isToday ? accentGreen.withValues(alpha: 0.15) : Colors.blue.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(radiusXs),
-          ),
-          child: Text(
-            isToday ? tr('היום', 'TODAY') : tr('מחר', 'TOMORROW'),
-            style: TextStyle(
-              color: isToday ? accentGreen : Colors.blue,
-              fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1,
-            ),
-          ),
-        ),
-        const SizedBox(width: spaceSm),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$stadium • $time',
-                style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800),
-                maxLines: 1, overflow: TextOverflow.ellipsis,
-              ),
-              if (user.isNotEmpty || phone.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  [user, phone].where((s) => s.isNotEmpty).join(' • '),
-                  style: TextStyle(color: textSecondary, fontSize: 11),
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ],
-          ),
-        ),
-      ]),
-    );
-  }
-}
-
 // ==================== ADMIN STADIUM TAB ====================
 class AdminStadiumTab extends StatefulWidget {
   final String stadiumName, stadiumId;
@@ -4935,52 +4467,6 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
   Widget _badge(String t, Color c) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withValues(alpha: 0.4))), child: Text(t, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.w900)));
 }
 
-// ==================== SINGLE ADMIN ====================
-class SingleAdminScreen extends StatelessWidget {
-  final String stadiumId;
-  const SingleAdminScreen({super.key, required this.stadiumId});
-
-  @override
-  Widget build(BuildContext context) {
-    final s = allStadiums.firstWhere((x) => x['id'] == stadiumId);
-    // Resolve the parent venue from the stadium so the admin uploads to
-    // the correct venue_config doc (e.g. y_stadium → venue 'y_stadium').
-    final venue = venueForStadium(s['id'] as String);
-    final venueId = (venue?['id'] as String?) ?? (s['id'] as String);
-    final venueNameRaw = isHebrew
-        ? (venue?['name'] as String?)
-        : (venue?['nameEn'] as String?);
-    final venueName = venueNameRaw ?? (s['name'] as String);
-
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        backgroundColor: bgColor,
-        appBar: AdminAppBar(
-          title: Row(children: [
-            Icon(Icons.shield_outlined, color: accentAmber, size: 20),
-            const SizedBox(width: 8),
-            Text('${s['name']} ${tr('אדמין', 'ADMIN')}', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
-          ]),
-          bottom: TabBar(
-            indicatorColor: accentGreen,
-            labelColor: accentGreen,
-            unselectedLabelColor: textSecondary,
-            tabs: [
-              Tab(text: tr('לוח זמנים', 'Schedule'), icon: const Icon(Icons.calendar_month_outlined, size: 18)),
-              Tab(text: tr('תמונת מתחם', 'Venue Image'), icon: const Icon(Icons.image_outlined, size: 18)),
-            ],
-          ),
-        ),
-        body: TabBarView(children: [
-          AdminStadiumTab(stadiumName: s['name'], stadiumId: s['id'], price: s['price']),
-          VenueImageScreen(venueId: venueId, venueName: venueName),
-        ]),
-      ),
-    );
-  }
-}
-
 // ==================== COURT ADMIN (one or more courts) ====================
 class CourtAdminScreen extends StatefulWidget {
   final List<String> stadiumIds;
@@ -5333,6 +4819,31 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
           const SizedBox(height: spaceMd),
           for (final v in venues) ...[
             _secTitle('${v['name']} • ${isHebrew ? v['region'] : v['regionEn'] ?? v['region']}'),
+            Semantics(
+              identifier: 'venue_school_switch_${v['id']}',
+              container: true,
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: v['hasTraining'] == true,
+                activeColor: colorInfo,
+                secondary: Icon(Icons.school_outlined, color: colorInfo),
+                title: Text(tr('יש בית ספר לילדים', 'Has a kids school'),
+                  style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
+                subtitle: Text(tr('המקום יופיע בלשונית "בית ספר" ומנהל המגרש יוכל לפתוח קבוצות',
+                    'Shows in the School tab; the court admin can open groups'),
+                  style: TextStyle(color: textSecondary, fontSize: 11)),
+                onChanged: (val) async {
+                  try {
+                    await FirebaseFirestore.instance.collection('venues').doc(v['id'] as String)
+                        .set({'hasTraining': val}, SetOptions(merge: true));
+                    await _reload();
+                  } catch (e) {
+                    if (mounted) showAppError(context, e);
+                  }
+                },
+              ),
+            ),
             const SizedBox(height: spaceXs),
             for (final id in (v['stadiumIds'] as List).cast<String>())
               if (stadiumById(id) != null) _courtCard(stadiumById(id)!, adminsByCourt[id] ?? const []),
@@ -5988,6 +5499,17 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                             cities: allCities,
                             selected: _cityFilter,
                             onSelected: (c) => setState(() => _cityFilter = c),
+                          ),
+
+                        if (venues.isEmpty)
+                          Semantics(
+                            identifier: 'venues_empty',
+                            container: true,
+                            child: appEmptyState(
+                              icon: Icons.stadium_outlined,
+                              title: tr('עוד אין מגרשים', 'No courts yet'),
+                              subtitle: tr('מגרשים חדשים יופיעו כאן בקרוב', 'New courts will show up here soon'),
+                            ),
                           ),
 
                         if (shownVenues.isEmpty && (showSportFilter || showCityFilter))
@@ -10549,8 +10071,7 @@ class _AdminAppBarState extends State<AdminAppBar> {
           ),
           offset: const Offset(0, 48),
           itemBuilder: (ctx) {
-            final isSuperAdmin = FirebaseAuth.instance.currentUser?.email == superAdminEmail
-                || isOwnerEmail(FirebaseAuth.instance.currentUser?.email);
+            final isSuperAdmin = isOwnerEmail(FirebaseAuth.instance.currentUser?.email);
             return [
               PopupMenuItem<String>(
                 value: 'profile',

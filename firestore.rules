@@ -26,12 +26,10 @@ service cloud.firestore {
         && request.auth.token.email_verified == true;
     }
 
+    // Admin over everything = the owner. Courts and their admins are all
+    // set up from the owner's screen; there are no built-in admin accounts.
     function isAdmin() {
-      return isOwner() || (isSignedIn() && request.auth.token.email in [
-        'admin@gmail.com',
-        'admin.md9@gmail.com',
-        'admin.ystadium@gmail.com'
-      ]);
+      return isOwner();
     }
 
     // Court admin: appointed by the owner in court_admins/{email}, limited to
