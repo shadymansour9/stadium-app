@@ -141,6 +141,20 @@ service cloud.firestore {
         && managesStadium(request.resource.data.get('stadiumId', ''))
       );
       allow delete: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
+
+      // Taken spots, without personal details, so parents can see how many
+      // are left. Created together with the parent's own registration.
+      match /seats/{regId} {
+        allow read:   if isSignedIn();
+        allow create: if isMember()
+          && request.resource.data.parentUserId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/training_registrations/$(regId)).data.parentUserId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/training_registrations/$(regId)).data.groupId == groupId;
+        allow delete: if isMember() && (
+          resource.data.parentUserId == request.auth.uid || isAdmin()
+          || managesStadium(get(/databases/$(database)/documents/training_groups/$(groupId)).data.get('stadiumId', ''))
+        );
+      }
     }
 
     // Parents register kids - parents see/manage their own; admins manage all.

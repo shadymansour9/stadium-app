@@ -1,4 +1,4 @@
-package com.example.stadium_app
+package com.regstadium.app
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -14,6 +14,58 @@
       },
       "oauth_client": [
         {
+          "client_id": "252689987865-8pmadpgq2vg4lp0gri8g78mos029jpqa.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.stadium_app",
+            "certificate_hash": "ccb162d911ee656fa80ec97859ebf1cab9b8aa88"
+          }
+        },
+        {
+          "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCjPTavTVpOmKlFsR1sfKNNSSAzeCQpXYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "252689987865-7b22s35qcm2m17f3tqdhgls8g72aicfa.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.stadiumApp"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:252689987865:android:59594440c04b18fa49ad88",
+        "android_client_info": {
+          "package_name": "com.regstadium.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "252689987865-chjujchevhd5pjpfebcf3kcoadm9bh5u.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.regstadium.app",
+            "certificate_hash": "ccb162d911ee656fa80ec97859ebf1cab9b8aa88"
+          }
+        },
+        {
           "client_id": "252689987865-f34p13d4brf6luis98k92pq0bm7ha82l.apps.googleusercontent.com",
           "client_type": 3
         }

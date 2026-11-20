@@ -1,6 +1,6 @@
 {
-    "name": "stadium_app",
-    "short_name": "stadium_app",
+    "name": "Stadium IL",
+    "short_name": "Stadium IL",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
