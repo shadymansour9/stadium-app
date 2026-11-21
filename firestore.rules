@@ -69,7 +69,7 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid
         || isAdmin()
         || managesStadium(resource.data.get('stadiumId', ''))
-        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'playerIds'])
       ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()));
       allow delete: if isMember() && (
         resource.data.userId == request.auth.uid
