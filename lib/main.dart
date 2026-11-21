@@ -1432,6 +1432,20 @@ Widget appTextField({
       : Semantics(identifier: identifier, container: true, child: field);
 }
 
+/// Tidies a person's name: single spaces, and a name entered twice in a row
+/// ("Dana Levi Dana Levi", e.g. typed after the name Google filled in) is
+/// kept once.
+String cleanPersonName(String raw) {
+  final words = raw.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  if (words.length >= 2 && words.length.isEven) {
+    final half = words.length ~/ 2;
+    if (words.sublist(0, half).join(' ') == words.sublist(half).join(' ')) {
+      return words.sublist(0, half).join(' ');
+    }
+  }
+  return words.join(' ');
+}
+
 /// City input that suggests Israeli cities from the first letter typed
 /// (Hebrew or English). A place that isn't listed can still be typed in.
 /// [onPicked] gets the (Hebrew, English) pair when a suggestion is chosen.
@@ -1479,12 +1493,30 @@ class _CityFieldState extends State<CityField> {
         final field = TextFormField(
           controller: controller,
           focusNode: focusNode,
-          validator: widget.validator,
+          // Only cities from the list: free text like "kika nazareth" can't
+          // be matched to courts later.
+          validator: (v) {
+            final base = widget.validator?.call(v);
+            if (base != null) return base;
+            if ((v ?? '').trim().isEmpty) return null;
+            return exactCity(v!) == null
+                ? tr('בחר עיר מהרשימה שנפתחת', 'Pick a city from the list')
+                : null;
+          },
+          onEditingComplete: () {
+            // "נצרת " or "nazareth" becomes the list's exact spelling.
+            final c = exactCity(controller.text);
+            if (c != null) {
+              controller.text = widget.english ? c.$2 : c.$1;
+              widget.onPicked?.call(c);
+            }
+            focusNode.unfocus();
+          },
           textDirection: widget.english ? TextDirection.ltr : null,
           style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
           decoration: InputDecoration(
             labelText: widget.label,
-            hintText: tr('התחל להקליד, למשל: ח', 'Start typing, e.g. H'),
+            hintText: tr('הקלד את תחילת השם ובחר מהרשימה', 'Type the start and pick from the list'),
             prefixIcon: Icon(Icons.location_city_outlined, color: textSecondary, size: 20),
             labelStyle: TextStyle(color: textSecondary, fontSize: 13),
             hintStyle: TextStyle(color: textTertiary, fontSize: 13),
@@ -3009,9 +3041,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         email: _emailCtrl.text.trim(),
         password: _passCtrl.text,
       );
-      await cred.user?.updateDisplayName(_nameCtrl.text.trim());
+      await cred.user?.updateDisplayName(cleanPersonName(_nameCtrl.text));
       await FirebaseFirestore.instance.collection('users').doc(cred.user!.uid).set({
-        'name': _nameCtrl.text.trim(),
+        'name': cleanPersonName(_nameCtrl.text),
         'phone': _phoneCtrl.text.trim(),
         'email': _emailCtrl.text.trim(),
         'city': _cityCtrl.text.trim(),
@@ -9283,7 +9315,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() => _saving = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-      final name = _nameCtrl.text.trim();
+      final name = cleanPersonName(_nameCtrl.text);
       await user?.updateDisplayName(name);
       await FirebaseFirestore.instance.collection('users').doc(user!.uid).set({
         'name':  name,

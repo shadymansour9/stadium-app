@@ -194,6 +194,17 @@ const List<(String, String)> israelCities = [
   ('תל שבע', 'Tel Sheva'),
 ];
 
+/// The list entry whose Hebrew or English name is exactly [text] (ignoring
+/// case and extra spaces), or null.
+(String, String)? exactCity(String text) {
+  final t = text.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  if (t.isEmpty) return null;
+  for (final c in israelCities) {
+    if (c.$1 == t || c.$2.toLowerCase() == t) return c;
+  }
+  return null;
+}
+
 /// Suggestions for what the person has typed so far: names starting with it
 /// come first, then names that contain it. Matches Hebrew or English.
 List<(String, String)> matchCities(String query, {int limit = 8}) {
