@@ -1999,7 +1999,7 @@ Widget _detailRow(IconData icon, String label, String value) => Padding(
 );
 
 // ==================== MANUAL BOOKING DIALOG ====================
-void showManualBookingDialog(BuildContext context, String stadiumName, String stadiumId, int price) async {
+Future<void> showManualBookingDialog(BuildContext context, String stadiumName, String stadiumId, int price) async {
   final nameCtrl = TextEditingController();
   final phoneCtrl = TextEditingController();
   final now = DateTime.now();
@@ -2015,24 +2015,23 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
   bool saving = false;
   String error = '';
 
-  // Load booking types
-  List<Map<String, dynamic>> bookingTypes = [];
-  Map<String, dynamic>? selectedType;
-  try {
-    final tSnap = await FirebaseFirestore.instance.collection('booking_types').where('stadiumId', isEqualTo: stadiumId).get();
-    if (tSnap.docs.isNotEmpty) {
-      bookingTypes = tSnap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-    } else {
-      bookingTypes = defaultBookingTypes.map((t) => {...t, 'price': price}).toList();
-    }
-    if (bookingTypes.isNotEmpty) selectedType = bookingTypes.first;
-  } catch (_) {
-    bookingTypes = defaultBookingTypes.map((t) => {...t, 'price': price}).toList();
-    if (bookingTypes.isNotEmpty) selectedType = bookingTypes.first;
-  }
+  // The window opens straight away with the usual booking types. Nothing is
+  // awaited before showDialog, so a slow or failed lookup can never leave the
+  // button doing nothing. The court's own types replace them if they exist.
+  List<Map<String, dynamic>> bookingTypes = defaultBookingTypes.map((t) => {...t, 'price': price}).toList();
+  Map<String, dynamic>? selectedType = bookingTypes.isNotEmpty ? bookingTypes.first : null;
+  void Function(void Function())? refreshDialog;
+  FirebaseFirestore.instance.collection('booking_types').where('stadiumId', isEqualTo: stadiumId).get().then((tSnap) {
+    if (tSnap.docs.isEmpty) return;
+    final own = tSnap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+    void apply() { bookingTypes = own; selectedType = own.first; }
+    try {
+      refreshDialog != null ? refreshDialog!(apply) : apply();
+    } catch (_) {/* window already closed */}
+  }).catchError((_) {/* keep the usual types */});
 
   await showDialog(context: context, builder: (_) => StatefulBuilder(
-    builder: (ctx, setS) => Dialog(
+    builder: (ctx, setS) { refreshDialog = setS; return Dialog(
       backgroundColor: cardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: SingleChildScrollView(
@@ -2185,7 +2184,7 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
           ]),
         ]),
       ),
-    ),
+    ); },
   ));
 }
 
@@ -5426,7 +5425,10 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
             label: tr('הוספת הזמנה', 'Add a booking'),
             icon: Icons.add_circle_outline,
             identifier: 'admin_add_booking',
-            onPressed: () => showManualBookingDialog(context, name, id, price),
+            onPressed: () => showManualBookingDialog(context, name, id, price).catchError((Object e) {
+              debugPrint('Add booking failed: $e');
+              if (mounted) showAppError(context, e);
+            }),
           ),
           const SizedBox(height: 4),
           Text(tr('למשל כשמישהו מזמין בטלפון', 'For example when someone books by phone'),
