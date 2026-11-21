@@ -7772,18 +7772,30 @@ class _BookingScreenState extends State<BookingScreen> {
       for (final id in ids) (stadiumById(id)?['name'] as String?) ?? '',
       widget.stadium['name'] as String,
     }..remove('');
-    final QuerySnapshot<Map<String, dynamic>> snap;
+    final user = FirebaseAuth.instance.currentUser!;
+    final myName = user.displayName ?? user.email ?? '';
+    final col = FirebaseFirestore.instance.collection('bookings');
+    final List<QuerySnapshot<Map<String, dynamic>>> snaps;
     try {
-      snap = await FirebaseFirestore.instance.collection('bookings')
-          .where('userId', isEqualTo: uid)
-          .where('date', isEqualTo: date)
-          .get();
+      snaps = await Future.wait([
+        col.where('userId', isEqualTo: uid).where('date', isEqualTo: date).get(),
+        // games joined from a friend's link or code
+        col.where('playerIds', arrayContains: uid).get(),
+        // older bookings only kept the name
+        if (myName.isNotEmpty) col.where('players', arrayContains: myName).get(),
+      ]);
     } catch (_) {
       return false; // can't check right now: let the booking go ahead
     }
-    final mine = snap.docs.where((d) => names.contains(d.data()['stadiumName'])).toList();
+    final seen = <String>{};
+    final mine = [
+      for (final snap in snaps)
+        for (final d in snap.docs)
+          if (seen.add(d.id) && d.data()['date'] == date && names.contains(d.data()['stadiumName'])) d,
+    ];
     if (mine.isEmpty || !mounted) return false;
     final b = mine.first.data();
+    final joined = b['userId'] != uid;
     final phone = ((widget.stadium['contactPhone'] as String?) ?? '').trim();
     final isToday = _selDay == 0;
     final placeName = (venue?['name'] as String?) ?? (widget.stadium['name'] as String);
@@ -7795,12 +7807,14 @@ class _BookingScreenState extends State<BookingScreen> {
         title: Semantics(identifier: 'daily_limit_dialog', container: true, child: Row(children: [
           Icon(Icons.event_busy_outlined, color: colorWarning),
           const SizedBox(width: 8),
-          Expanded(child: Text(isToday ? tr('כבר יש לך הזמנה היום', 'You already booked today')
-                                       : tr('כבר יש לך הזמנה ביום הזה', 'You already booked that day'),
+          Expanded(child: Text(isToday ? tr('כבר יש לך משחק היום', 'You already play today')
+                                       : tr('כבר יש לך משחק ביום הזה', 'You already play that day'),
             style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 17))),
         ])),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(tr('ההזמנה שלך: ${b['date']} בשעה ${b['time']}.', 'Your booking: ${b['date']} at ${b['time']}.'),
+          Text(joined
+              ? tr('הצטרפת למשחק של ${b['userName'] ?? 'חבר'}: ${b['date']} בשעה ${b['time']}.', "You joined ${b['userName'] ?? 'a friend'}'s game: ${b['date']} at ${b['time']}.")
+              : tr('ההזמנה שלך: ${b['date']} בשעה ${b['time']}.', 'Your booking: ${b['date']} at ${b['time']}.'),
             style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           Text(phone.isEmpty
@@ -8093,6 +8107,7 @@ class _BookingScreenState extends State<BookingScreen> {
       'durationMinutes': durationMins,
       'bookingCode': code,
       'players': [myName],
+      'playerIds': [if (user != null) user.uid],
       'createdAt': DateTime.now().toIso8601String(),
       'maxPlayers': _maxPlayersForBooking,
       if (isRacketSport(_sport)) ...{
@@ -8822,7 +8837,10 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
         final cap = (data['maxPlayers'] as num).toInt();
         if (players.contains(_myName)) return null;
         if (players.length >= cap) return tr('ההזמנה מלאה ($cap/$cap)', 'Booking full ($cap/$cap)');
-        txn.update(ref, {'players': [...players, _myName]});
+        txn.update(ref, {
+          'players': [...players, _myName],
+          'playerIds': FieldValue.arrayUnion([FirebaseAuth.instance.currentUser?.uid ?? '']),
+        });
         return null;
       });
     } catch (e) {
@@ -8858,9 +8876,12 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
     }
     // Football (unchanged).
     final p=(_booking!['players'] as List?)??[];
-    if (p.length>=18) { setState(() { _error=tr('הקבוצה מלאה (18/18)','Team full (18/18)'); }); return; }
+    if (p.length>=15) { setState(() { _error=tr('הקבוצה מלאה (15/15)','Team full (15/15)'); }); return; }
     setState(() { _loading=true; });
-    await FirebaseFirestore.instance.collection('bookings').doc(_booking!['id']).update({'players': FieldValue.arrayUnion([_myName])});
+    await FirebaseFirestore.instance.collection('bookings').doc(_booking!['id']).update({
+      'players': FieldValue.arrayUnion([_myName]),
+      'playerIds': FieldValue.arrayUnion([FirebaseAuth.instance.currentUser?.uid ?? '']),
+    });
     final user = FirebaseAuth.instance.currentUser;
     await FirebaseFirestore.instance.collection('notifications').add({
       'userId': user?.uid,
@@ -8879,7 +8900,10 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
 
   Future<void> _leave() async {
     setState(() { _loading=true; });
-    await FirebaseFirestore.instance.collection('bookings').doc(_booking!['id']).update({'players': FieldValue.arrayRemove([_myName])});
+    await FirebaseFirestore.instance.collection('bookings').doc(_booking!['id']).update({
+      'players': FieldValue.arrayRemove([_myName]),
+      'playerIds': FieldValue.arrayRemove([FirebaseAuth.instance.currentUser?.uid ?? '']),
+    });
     setState(() { _success=tr('הוסרת מההזמנה ✓','Removed ✓'); _loading=false; _joined=false; _booking=null; });
   }
 
@@ -9443,6 +9467,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
     try {
       await FirebaseFirestore.instance.collection('bookings').doc(docId).update({
         'players': FieldValue.arrayRemove([myName]),
+        'playerIds': FieldValue.arrayRemove([FirebaseAuth.instance.currentUser?.uid ?? '']),
       });
       if (!mounted) return;
       setState(_refresh);
