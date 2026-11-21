@@ -4852,6 +4852,7 @@ class CourtSettingsScreen extends StatefulWidget {
 class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _priceCtrl;
+  late final TextEditingController _phoneCtrl;
   late int _slotMinutes;
   late int _maxPlayers;
   late String _open;
@@ -4866,6 +4867,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
     _maxPlayers = courtMaxPlayers(c);
     final p = (c['pricePerHour'] as num?)?.round();
     _priceCtrl = TextEditingController(text: p?.toString() ?? '');
+    _phoneCtrl = TextEditingController(text: (c['contactPhone'] as String?) ?? '');
     final options = (sportDefaults[sportOf(c)]!['slotOptions'] as List).cast<int>();
     final m = (c['slotMinutes'] as int?) ?? (sportDefaults[sportOf(c)]!['defaultSlotMinutes'] as int);
     _slotMinutes = options.contains(m) ? m : options.first;
@@ -4876,6 +4878,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   @override
   void dispose() {
     _priceCtrl.dispose();
+    _phoneCtrl.dispose();
     super.dispose();
   }
 
@@ -4918,6 +4921,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
         'closeTime': _close,
         'slotMinutes': _slotMinutes,
         'maxPlayers': _maxPlayers,
+        'contactPhone': _phoneCtrl.text.trim(),
       }).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -4947,6 +4951,19 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
       body: Center(child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: Form(key: _formKey, child: ListView(padding: const EdgeInsets.all(spaceMd), children: [
+          choiceLabel(tr('טלפון של המגרש', "Court's phone")),
+          appTextField(
+            controller: _phoneCtrl,
+            label: tr('טלפון ליצירת קשר', 'Contact phone'),
+            icon: Icons.phone_outlined,
+            keyboardType: TextInputType.phone,
+            identifier: 'court_settings_phone',
+          ),
+          const SizedBox(height: 4),
+          Text(tr('שחקן שכבר הזמין היום ורוצה עוד שעה יתבקש להתקשר למספר הזה.',
+                  'A player who already booked today and wants another time is asked to call this number.'),
+            style: TextStyle(color: textSecondary, fontSize: 12)),
+          const SizedBox(height: spaceLg),
           choiceLabel(tr('מחיר לשעה', 'Price per hour')),
           appTextField(
             controller: _priceCtrl,
@@ -7742,9 +7759,82 @@ class _BookingScreenState extends State<BookingScreen> {
     }).toList();
   }
 
+  /// A player books one time per day at each place. Another one goes through
+  /// the court admin, who adds it by hand (their bookings have no limit).
+  /// True when the player already has one, after telling them whom to call.
+  Future<bool> _alreadyBookedThatDay() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
+    final date = _days[_selDay]['date'];
+    final venue = venueForStadium(widget.stadium['id'] as String);
+    final ids = ((venue?['stadiumIds'] as List?) ?? [widget.stadium['id']]).cast<String>();
+    final names = <String>{
+      for (final id in ids) (stadiumById(id)?['name'] as String?) ?? '',
+      widget.stadium['name'] as String,
+    }..remove('');
+    final QuerySnapshot<Map<String, dynamic>> snap;
+    try {
+      snap = await FirebaseFirestore.instance.collection('bookings')
+          .where('userId', isEqualTo: uid)
+          .where('date', isEqualTo: date)
+          .get();
+    } catch (_) {
+      return false; // can't check right now: let the booking go ahead
+    }
+    final mine = snap.docs.where((d) => names.contains(d.data()['stadiumName'])).toList();
+    if (mine.isEmpty || !mounted) return false;
+    final b = mine.first.data();
+    final phone = ((widget.stadium['contactPhone'] as String?) ?? '').trim();
+    final isToday = _selDay == 0;
+    final placeName = (venue?['name'] as String?) ?? (widget.stadium['name'] as String);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardColor,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusXl)),
+        title: Semantics(identifier: 'daily_limit_dialog', container: true, child: Row(children: [
+          Icon(Icons.event_busy_outlined, color: colorWarning),
+          const SizedBox(width: 8),
+          Expanded(child: Text(isToday ? tr('כבר יש לך הזמנה היום', 'You already booked today')
+                                       : tr('כבר יש לך הזמנה ביום הזה', 'You already booked that day'),
+            style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 17))),
+        ])),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(tr('ההזמנה שלך: ${b['date']} בשעה ${b['time']}.', 'Your booking: ${b['date']} at ${b['time']}.'),
+            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Text(phone.isEmpty
+              ? tr('אפשר להזמין שעה אחת ביום ב$placeName. רוצה עוד שעה? פנה למנהל המגרש והוא יוסיף אותה בשבילך.',
+                   'You can book one time a day at $placeName. Want another? Ask the court manager to add it for you.')
+              : tr('אפשר להזמין שעה אחת ביום ב$placeName. רוצה עוד שעה? התקשר למנהל המגרש והוא יוסיף אותה בשבילך.',
+                   'You can book one time a day at $placeName. Want another? Call the court manager to add it for you.'),
+            style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4)),
+          if (phone.isNotEmpty) ...[
+            const SizedBox(height: spaceMd),
+            Row(children: [
+              Expanded(child: _adminActionButton('daily_limit_call', Icons.call, tr('התקשר', 'Call'), accentGreen,
+                () => openExternalLink(ctx, Uri(scheme: 'tel', path: phone)))),
+              const SizedBox(width: spaceXs),
+              Expanded(child: _adminActionButton('daily_limit_whatsapp', Icons.chat, 'WhatsApp', const Color(0xFF25D366),
+                () => sendWhatsApp(ctx,
+                  tr('שלום, יש לי הזמנה ב-${b['date']} בשעה ${b['time']} ב$placeName ואני רוצה להזמין עוד שעה באותו יום: ${_slotLabel(_visibleSlots[_selSlot!])}',
+                     'Hi, I have a booking on ${b['date']} at ${b['time']} at $placeName and would like another time that day: ${_slotLabel(_visibleSlots[_selSlot!])}'),
+                  phone: phone))),
+            ]),
+          ],
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('סגור', 'Close'), style: TextStyle(color: textSecondary))),
+        ],
+      ),
+    );
+    return true;
+  }
+
   Future<void> _book() async {
     if (_selSlot == null) return;
     if (!await requireAccount(context) || !mounted) return;
+    if (await _alreadyBookedThatDay() || !mounted) return;
     final slot = _visibleSlots[_selSlot!];
     final label = _slotLabel(slot);
 
