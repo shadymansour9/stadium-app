@@ -397,7 +397,6 @@ class _PlayerShellState extends State<PlayerShell> {
               _item(0, 'tab_home', Icons.home_rounded, tr('בית', 'Home')),
               _item(1, 'tab_bookings', Icons.calendar_month_rounded, tr('ההזמנות שלי', 'My bookings')),
               _item(2, 'tab_school', Icons.school_rounded, tr('בית ספר', 'School')),
-              _item(3, 'tab_join', Icons.group_add_rounded, tr('הצטרף למשחק', 'Join a game')),
               _item(4, 'tab_profile', Icons.person_rounded, tr('פרופיל', 'Profile')),
             ]),
           ),
@@ -2714,7 +2713,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: spaceXs),
                     Text(
-                      tr('ניהול מגרשים מקצועי', 'Professional venue management'),
+                      tr('מזמינים מגרש בכמה לחיצות', 'Book a court in a few taps'),
                       style: TextStyle(
                         color: textSecondary,
                         fontSize: 13,
@@ -3915,30 +3914,20 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       stream: FirebaseFirestore.instance
           .collection('bookings')
           .where('stadiumName', isEqualTo: widget.stadiumName)
-          .limit(200)
           .snapshots(),
       builder: (ctx, snap) {
         if (!snap.hasData) return Center(child: CircularProgressIndicator(color: accentGreen));
         final now = DateTime.now();
+        // bookingStart reads "d/m" across the new year (January after December).
         var docs = snap.data!.docs.where((d) {
-          final b = d.data();
-          try {
-            final parts = (b['date'] as String).split('/');
-            final h = int.parse((b['time'] as String).split(':')[0]);
-            final bookingDate = DateTime(now.year, int.parse(parts[1]), int.parse(parts[0]), h);
-            return upcoming ? bookingDate.isAfter(now) : bookingDate.isBefore(now);
-          } catch(_) { return upcoming; }
+          final start = bookingStart(d.data());
+          if (start == null) return upcoming;
+          return upcoming ? start.isAfter(now) : start.isBefore(now);
         }).toList()
           ..sort((a, b) {
-            try {
-              final pa = (a.data()['date'] as String).split('/');
-              final pb = (b.data()['date'] as String).split('/');
-              final ha = int.parse((a.data()['time'] as String).split(':')[0]);
-              final hb = int.parse((b.data()['time'] as String).split(':')[0]);
-              final da = DateTime(DateTime.now().year, int.parse(pa[1]), int.parse(pa[0]), ha);
-              final db = DateTime(DateTime.now().year, int.parse(pb[1]), int.parse(pb[0]), hb);
-              return upcoming ? da.compareTo(db) : db.compareTo(da);
-            } catch(_) { return 0; }
+            final da = bookingStart(a.data()), db = bookingStart(b.data());
+            if (da == null || db == null) return 0;
+            return upcoming ? da.compareTo(db) : db.compareTo(da);
           });
 
         // Search filter
@@ -4219,20 +4208,18 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     }
     if (widget.mode == AdminTabMode.reports) {
       return DefaultTabController(
-        length: 3,
+        length: 2,
         child: Column(children: [
           TabBar(
             indicatorColor: accentGreen, labelColor: accentGreen, unselectedLabelColor: textSecondary,
             tabs: [
-              Tab(text: tr('הזמנות קרובות', 'Upcoming')),
-              Tab(text: tr('הזמנות שעברו', 'Past')),
               Tab(text: tr('הכנסות', 'Income')),
+              Tab(text: tr('הזמנות שעברו', 'Past bookings')),
             ],
           ),
           Expanded(child: TabBarView(children: [
-            _buildBookingsList(upcoming: true),
-            _buildBookingsList(upcoming: false),
             _buildStadiumReports(),
+            _buildBookingsList(upcoming: false),
           ])),
         ]),
       );
@@ -5103,7 +5090,7 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
         body = AdminStadiumTab(key: ValueKey('rep_$id'), stadiumName: name, stadiumId: id, price: price, limitedTools: true, mode: AdminTabMode.reports);
         break;
       default:
-        body = CourtTodayView(key: ValueKey('today_$id'), court: court, onOpenRequests: () => setState(() => _tab = 'requests'));
+        body = CourtBookingsView(key: ValueKey('today_$id'), court: court, onOpenRequests: () => setState(() => _tab = 'requests'));
     }
 
     return Scaffold(
@@ -5150,7 +5137,7 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
         child: SafeArea(
           top: false,
           child: Row(children: [
-            _navItem('today', Icons.today_rounded, tr('היום', 'Today')),
+            _navItem('today', Icons.event_note_rounded, tr('הזמנות', 'Bookings')),
             _navItem('schedule', Icons.calendar_month_rounded, tr('לוח שעות', 'Schedule')),
             _navItem('requests', Icons.event_repeat_rounded, tr('בקשות', 'Requests')),
             if (hasSchool) _navItem('school', Icons.school_rounded, tr('בית ספר', 'School')),
@@ -5164,124 +5151,277 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
 
 /// "Today": how many bookings and how much income, then each booking with
 /// buttons to call or message the player.
-class CourtTodayView extends StatelessWidget {
+/// "Bookings": everything from today on, one section per day ("Today",
+/// "Tomorrow", "Wed 25/11"…), with search by name/phone and a date picker.
+class CourtBookingsView extends StatefulWidget {
   final Map<String, dynamic> court;
   final VoidCallback onOpenRequests;
-  const CourtTodayView({super.key, required this.court, required this.onOpenRequests});
+  const CourtBookingsView({super.key, required this.court, required this.onOpenRequests});
+  @override State<CourtBookingsView> createState() => _CourtBookingsViewState();
+}
 
-  Widget _bookingTile(BuildContext context, QueryDocumentSnapshot<Map<String, dynamic>> d) {
-    final b = d.data();
-    final phone = (b['phone'] as String? ?? '').trim();
-    final userName = (b['userName'] as String? ?? '').trim();
-    final players = ((b['players'] as List?) ?? const []).length;
-    return Semantics(
-      identifier: 'admin_today_booking_${d.id}',
-      container: true,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: spaceSm),
-        padding: const EdgeInsets.all(spaceSm),
-        decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: borderColor)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusMd)),
-              child: Text((b['time'] as String?) ?? '', textDirection: TextDirection.ltr,
-                style: TextStyle(color: accentGreen, fontSize: 15, fontWeight: FontWeight.w900)),
+class _CourtBookingsViewState extends State<CourtBookingsView> {
+  final _searchCtrl = TextEditingController();
+  String _search = '';
+  /// 'all', 'today', 'tomorrow', 'week' or 'date' (then [_date]).
+  String _range = 'all';
+  DateTime? _date;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// "Today", "Tomorrow", "Day after tomorrow", else the weekday.
+  static String dayTitle(DateTime day) {
+    final diff = _day(day).difference(_day(DateTime.now())).inDays;
+    if (diff == 0) return tr('היום', 'Today');
+    if (diff == 1) return tr('מחר', 'Tomorrow');
+    if (diff == 2) return tr('מחרתיים', 'Day after tomorrow');
+    const he = ['שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת', 'ראשון'];
+    const en = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    return isHebrew ? 'יום ${he[day.weekday - 1]}' : en[day.weekday - 1];
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date ?? now,
+      firstDate: _day(now),
+      lastDate: now.add(const Duration(days: 365)),
+      builder: (_, child) => Theme(data: appThemeData(), child: child!),
+    );
+    if (picked != null) setState(() { _range = 'date'; _date = picked; });
+  }
+
+  bool _inRange(DateTime start) {
+    final today = _day(DateTime.now());
+    final day = _day(start);
+    switch (_range) {
+      case 'today': return day == today;
+      case 'tomorrow': return day == today.add(const Duration(days: 1));
+      case 'week': return day.isBefore(today.add(const Duration(days: 7)));
+      case 'date': return _date != null && day == _day(_date!);
+      default: return true;
+    }
+  }
+
+  Widget _chip(String id, String label, {IconData? icon}) {
+    final sel = _range == id;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: Semantics(
+        identifier: 'bookings_filter_$id',
+        button: true,
+        selected: sel,
+        container: true,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => setState(() { _range = id; if (id != 'date') _date = null; }),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: sel ? accentGreen : cardColor,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: sel ? accentGreen : borderColor),
             ),
-            const SizedBox(width: spaceSm),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(userName.isEmpty ? tr('ללא שם', 'No name') : userName, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 2),
-                Text('$players ${tr('שחקנים', 'players')}${phone.isNotEmpty ? ' · $phone' : ''}',
-                  style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
-              ]),
-            ),
-          ]),
-          const SizedBox(height: spaceSm),
-          Row(children: [
-            if (phone.isNotEmpty) ...[
-              Expanded(child: _adminActionButton('admin_call_${d.id}', Icons.call, tr('התקשר', 'Call'), accentGreen,
-                () => openExternalLink(context, Uri(scheme: 'tel', path: phone)))),
-              const SizedBox(width: spaceXs),
-              Expanded(child: _adminActionButton('admin_whatsapp_${d.id}', Icons.chat, 'WhatsApp', const Color(0xFF25D366),
-                () => sendWhatsApp(context,
-                  tr('שלום $userName, לגבי ההזמנה שלך היום ב-${b['time']} ב-${b['stadiumName']}',
-                     'Hi $userName, about your booking today at ${b['time']} at ${b['stadiumName']}'),
-                  phone: phone))),
-              const SizedBox(width: spaceXs),
-            ],
-            Expanded(child: _adminActionButton('admin_details_${d.id}', Icons.info_outline, tr('פרטים', 'Details'), textSecondary,
-              () => showBookingDetails(context, b, isAdmin: true, docId: d.id))),
-          ]),
-        ]),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (icon != null) ...[Icon(icon, size: 15, color: sel ? bgColor : textSecondary), const SizedBox(width: 4)],
+              Text(label, style: TextStyle(color: sel ? bgColor : textPrimary, fontSize: 13, fontWeight: FontWeight.w800)),
+            ]),
+          ),
+        ),
       ),
     );
   }
 
+  Widget _dayHeader(DateTime day, int count, int income) => Padding(
+    padding: const EdgeInsets.only(top: spaceMd, bottom: spaceSm),
+    child: Row(children: [
+      Container(
+        width: 46, height: 46,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: _day(day) == _day(DateTime.now()) ? accentGreen : cardColor,
+          borderRadius: BorderRadius.circular(radiusMd),
+          border: Border.all(color: _day(day) == _day(DateTime.now()) ? accentGreen : borderColor),
+        ),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('${day.day}', style: TextStyle(
+            color: _day(day) == _day(DateTime.now()) ? bgColor : textPrimary, fontSize: 17, fontWeight: FontWeight.w900, height: 1)),
+          Text('/${day.month}', style: TextStyle(
+            color: _day(day) == _day(DateTime.now()) ? bgColor : textSecondary, fontSize: 10, fontWeight: FontWeight.w700)),
+        ]),
+      ),
+      const SizedBox(width: spaceSm),
+      Expanded(child: Text(dayTitle(day), style: TextStyle(color: textPrimary, fontSize: 17, fontWeight: FontWeight.w900))),
+      Text(count == 1 ? tr('הזמנה אחת', '1 booking') : tr('$count הזמנות', '$count bookings'),
+        style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+      const SizedBox(width: 8),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: colorInfo.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusSm)),
+        child: Text('₪$income', style: TextStyle(color: colorInfo, fontSize: 12, fontWeight: FontWeight.w900)),
+      ),
+    ]),
+  );
+
+  Widget _bookingTile(QueryDocumentSnapshot<Map<String, dynamic>> d, DateTime start) {
+    final b = d.data();
+    final phone = (b['phone'] as String? ?? '').trim();
+    final userName = (b['userName'] as String? ?? '').trim();
+    final players = ((b['players'] as List?) ?? const []).length;
+    final over = start.isBefore(DateTime.now().subtract(Duration(minutes: (b['durationMinutes'] as int?) ?? 60)));
+    final manual = b['isManual'] == true;
+    return Semantics(
+      identifier: 'admin_booking_${d.id}',
+      container: true,
+      child: Opacity(
+        opacity: over ? 0.55 : 1,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: spaceSm),
+          padding: const EdgeInsets.all(spaceSm),
+          decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: borderColor)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusMd)),
+                child: Text((b['time'] as String?) ?? '', textDirection: TextDirection.ltr,
+                  style: TextStyle(color: accentGreen, fontSize: 15, fontWeight: FontWeight.w900)),
+              ),
+              const SizedBox(width: spaceSm),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(userName.isEmpty ? tr('ללא שם', 'No name') : userName, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 2),
+                  Text([
+                    if (phone.isNotEmpty) phone,
+                    players == 1 ? tr('שחקן אחד', '1 player') : tr('$players שחקנים', '$players players'),
+                    if (manual) tr('נרשם ידנית', 'added by you'),
+                    if (over) tr('הסתיים', 'finished'),
+                  ].join(' · '), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                ]),
+              ),
+              Text('₪${bookingAmount(b)}', style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900)),
+            ]),
+            const SizedBox(height: spaceSm),
+            Row(children: [
+              if (phone.isNotEmpty) ...[
+                Expanded(child: _adminActionButton('admin_call_${d.id}', Icons.call, tr('התקשר', 'Call'), accentGreen,
+                  () => openExternalLink(context, Uri(scheme: 'tel', path: phone)))),
+                const SizedBox(width: spaceXs),
+                Expanded(child: _adminActionButton('admin_whatsapp_${d.id}', Icons.chat, 'WhatsApp', const Color(0xFF25D366),
+                  () => sendWhatsApp(context,
+                    tr('שלום $userName, לגבי ההזמנה שלך ב-${b['date']} בשעה ${b['time']} ב-${b['stadiumName']}',
+                       'Hi $userName, about your booking on ${b['date']} at ${b['time']} at ${b['stadiumName']}'),
+                    phone: phone))),
+                const SizedBox(width: spaceXs),
+              ],
+              Expanded(child: _adminActionButton('admin_details_${d.id}', Icons.info_outline, tr('פרטים', 'Details'), textSecondary,
+                () => showBookingDetails(context, b, isAdmin: true, docId: d.id))),
+            ]),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _pendingBanner(String id) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: FirebaseFirestore.instance.collection('fixed_requests').where('stadiumId', isEqualTo: id).snapshots(),
+    builder: (ctx, rSnap) {
+      final pending = (rSnap.data?.docs ?? const []).where((d) => d.data()['status'] == 'pending').length;
+      if (pending == 0) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: spaceMd),
+        child: Semantics(
+          identifier: 'admin_pending_requests',
+          button: true,
+          container: true,
+          child: Material(
+            color: colorWarning.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(radiusLg),
+            child: InkWell(
+              onTap: widget.onOpenRequests,
+              borderRadius: BorderRadius.circular(radiusLg),
+              child: Padding(
+                padding: const EdgeInsets.all(spaceSm),
+                child: Row(children: [
+                  Icon(Icons.notifications_active_outlined, color: colorWarning),
+                  const SizedBox(width: spaceSm),
+                  Expanded(child: Text(
+                    pending == 1
+                        ? tr('בקשה אחת לשעה קבועה מחכה לתשובה שלך', 'A fixed-slot request is waiting for you')
+                        : tr('$pending בקשות לשעה קבועה מחכות לתשובה שלך', '$pending fixed-slot requests are waiting for you'),
+                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w800))),
+                  Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: colorWarning),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
-    final id = court['id'] as String;
-    final name = court['name'] as String;
-    final price = (court['price'] as num?)?.round() ?? 0;
-    final now = DateTime.now();
-    final today = dateKeyOf(now);
+    final id = widget.court['id'] as String;
+    final name = widget.court['name'] as String;
+    final price = (widget.court['price'] as num?)?.round() ?? 0;
+    final today = _day(DateTime.now());
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('bookings')
-          .where('stadiumName', isEqualTo: name)
-          .where('date', isEqualTo: today)
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', isEqualTo: name).snapshots(),
       builder: (ctx, snap) {
-        final docs = [...(snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[])]
-          ..sort((a, b) => ((a.data()['time'] as String?) ?? '').compareTo((b.data()['time'] as String?) ?? ''));
-        final income = docs.fold<int>(0, (s, d) => s + bookingAmount(d.data()));
+        // From today on, with the start time read once.
+        final upcoming = <(QueryDocumentSnapshot<Map<String, dynamic>>, DateTime)>[];
+        for (final d in snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+          final start = bookingStart(d.data());
+          if (start != null && !_day(start).isBefore(today)) upcoming.add((d, start));
+        }
+        upcoming.sort((a, b) => a.$2.compareTo(b.$2));
+
+        final todayList = upcoming.where((e) => _day(e.$2) == today).toList();
+        final todayIncome = todayList.fold<int>(0, (s, e) => s + bookingAmount(e.$1.data()));
+        final tomorrowCount = upcoming.where((e) => _day(e.$2) == today.add(const Duration(days: 1))).length;
+
+        final q = _search.trim().toLowerCase();
+        final shown = upcoming.where((e) {
+          if (!_inRange(e.$2)) return false;
+          if (q.isEmpty) return true;
+          final b = e.$1.data();
+          final digits = q.replaceAll(RegExp(r'[^0-9]'), '');
+          final phone = ((b['phone'] as String?) ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+          return ((b['userName'] as String?) ?? '').toLowerCase().contains(q)
+              || (digits.isNotEmpty && phone.contains(digits));
+        }).toList();
+
+        // Group by day, in order.
+        final days = <DateTime, List<(QueryDocumentSnapshot<Map<String, dynamic>>, DateTime)>>{};
+        for (final e in shown) {
+          days.putIfAbsent(_day(e.$2), () => []).add(e);
+        }
+
         return ListView(padding: const EdgeInsets.all(spaceMd), children: [
-          Text('${tr('היום', 'Today')} · ${hebrewWeekday(now.weekday, isHebrew)} $today',
-            style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900)),
-          Text(name, style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
-          const SizedBox(height: spaceMd),
           Row(children: [
-            Expanded(child: _adminStatTile('${docs.length}', tr('הזמנות היום', 'Bookings today'), Icons.event_available, accentGreen)),
+            Expanded(child: _adminStatTile('${todayList.length}', tr('הזמנות היום', 'Bookings today'), Icons.event_available, accentGreen)),
             const SizedBox(width: spaceSm),
-            Expanded(child: _adminStatTile('₪$income', tr('הכנסה היום', 'Income today'), Icons.payments_outlined, colorInfo)),
+            Expanded(child: _adminStatTile('₪$todayIncome', tr('הכנסה היום', 'Income today'), Icons.payments_outlined, colorInfo)),
           ]),
+          const SizedBox(height: spaceSm),
+          Center(child: Text(
+            tomorrowCount == 0 ? tr('מחר עוד אין הזמנות', 'No bookings tomorrow yet')
+              : tomorrowCount == 1 ? tr('מחר: הזמנה אחת', 'Tomorrow: 1 booking')
+              : tr('מחר: $tomorrowCount הזמנות', 'Tomorrow: $tomorrowCount bookings'),
+            style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w700))),
           const SizedBox(height: spaceMd),
-          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance.collection('fixed_requests').where('stadiumId', isEqualTo: id).snapshots(),
-            builder: (ctx, rSnap) {
-              final pending = (rSnap.data?.docs ?? const []).where((d) => d.data()['status'] == 'pending').length;
-              if (pending == 0) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(bottom: spaceMd),
-                child: Semantics(
-                  identifier: 'admin_pending_requests',
-                  button: true,
-                  container: true,
-                  child: Material(
-                    color: colorWarning.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(radiusLg),
-                    child: InkWell(
-                      onTap: onOpenRequests,
-                      borderRadius: BorderRadius.circular(radiusLg),
-                      child: Padding(
-                        padding: const EdgeInsets.all(spaceSm),
-                        child: Row(children: [
-                          Icon(Icons.notifications_active_outlined, color: colorWarning),
-                          const SizedBox(width: spaceSm),
-                          Expanded(child: Text(
-                            tr('$pending בקשות לשעה קבועה מחכות לתשובה שלך', '$pending fixed-slot requests are waiting for you'),
-                            style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w800))),
-                          Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: colorWarning),
-                        ]),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
+          _pendingBanner(id),
           appPrimaryButton(
             label: tr('הוספת הזמנה', 'Add a booking'),
             icon: Icons.add_circle_outline,
@@ -5292,17 +5432,84 @@ class CourtTodayView extends StatelessWidget {
           Text(tr('למשל כשמישהו מזמין בטלפון', 'For example when someone books by phone'),
             textAlign: TextAlign.center, style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: spaceLg),
-          appSectionTitle(tr('ההזמנות של היום', "TODAY'S BOOKINGS")),
+
+          // Search + filters
+          Semantics(
+            identifier: 'bookings_search',
+            container: true,
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: (v) => setState(() => _search = v),
+              style: TextStyle(color: textPrimary, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: tr('חיפוש לפי שם או טלפון', 'Search by name or phone'),
+                hintStyle: TextStyle(color: textTertiary, fontSize: 13),
+                prefixIcon: Icon(Icons.search, color: textSecondary, size: 20),
+                suffixIcon: _search.isEmpty ? null : IconButton(
+                  icon: Icon(Icons.close, color: textSecondary, size: 18),
+                  onPressed: () => setState(() { _searchCtrl.clear(); _search = ''; }),
+                ),
+                filled: true, fillColor: cardColor,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 1.5)),
+              ),
+            ),
+          ),
+          const SizedBox(height: spaceSm),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              _chip('all', tr('הכל', 'All')),
+              _chip('today', tr('היום', 'Today')),
+              _chip('tomorrow', tr('מחר', 'Tomorrow')),
+              _chip('week', tr('7 ימים', '7 days')),
+              Semantics(
+                identifier: 'bookings_pick_date',
+                button: true,
+                container: true,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: _pickDate,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _range == 'date' ? accentGreen : cardColor,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: _range == 'date' ? accentGreen : borderColor),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.calendar_month_outlined, size: 15, color: _range == 'date' ? bgColor : textSecondary),
+                      const SizedBox(width: 4),
+                      Text(_range == 'date' && _date != null ? '${_date!.day}/${_date!.month}' : tr('בחר תאריך', 'Pick a date'),
+                        style: TextStyle(color: _range == 'date' ? bgColor : textPrimary, fontSize: 13, fontWeight: FontWeight.w800)),
+                    ]),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+
           if (!snap.hasData)
-            appLoading()
-          else if (docs.isEmpty)
-            appEmptyState(
-              icon: Icons.event_busy_outlined,
-              title: tr('אין הזמנות היום', 'No bookings today'),
-              subtitle: tr('הזמנות חדשות יופיעו כאן לבד', 'New bookings show up here by themselves'),
+            Padding(padding: const EdgeInsets.only(top: spaceLg), child: appLoading())
+          else if (days.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: spaceLg),
+              child: appEmptyState(
+                icon: q.isNotEmpty ? Icons.search_off : Icons.event_busy_outlined,
+                title: q.isNotEmpty
+                    ? tr('לא נמצאה הזמנה', 'No booking found')
+                    : _range == 'all' ? tr('אין הזמנות קרובות', 'No upcoming bookings') : tr('אין הזמנות בזמן הזה', 'No bookings then'),
+                subtitle: tr('הזמנות חדשות יופיעו כאן לבד', 'New bookings show up here by themselves'),
+              ),
             )
           else
-            for (final d in docs) _bookingTile(context, d),
+            for (final entry in days.entries) ...[
+              _dayHeader(entry.key, entry.value.length,
+                entry.value.fold<int>(0, (s, e) => s + bookingAmount(e.$1.data()))),
+              for (final e in entry.value) _bookingTile(e.$1, e.$2),
+            ],
         ]);
       },
     );
@@ -7992,7 +8199,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Text(
-                                        d['name'] as String,
+                                        i == 0 ? tr('היום', 'Today') : i == 1 ? tr('מחר', 'Tmrw') : d['name'] as String,
                                         style: TextStyle(
                                           color: selected ? bgColor : textSecondary,
                                           fontSize: 11, fontWeight: FontWeight.w700,
@@ -8014,7 +8221,7 @@ class _BookingScreenState extends State<BookingScreen> {
                             },
                           ),
                         ),
-                        if (_bookingTypes.isNotEmpty) ...[
+                        if (_bookingTypes.length > 1) ...[
                           const SizedBox(height: spaceLg),
                           appSectionTitle(tr('סוג הזמנה', 'BOOKING TYPE')),
                           const SizedBox(height: spaceXs),
@@ -8061,15 +8268,12 @@ class _BookingScreenState extends State<BookingScreen> {
                         const SizedBox(height: spaceLg),
                         appSectionTitle(tr('בחר שעה', 'SELECT TIME')),
                         const SizedBox(height: spaceXs),
-                        Wrap(
-                          spacing: 12, runSpacing: 6,
-                          children: [
-                            _legendDot(tr('פנוי', 'Free'), accentGreen),
-                            _legendDot(tr('תפוס', 'Booked'), colorWarning),
-                            _legendDot(tr('חסום', 'Closed'), colorError),
-                            _legendDot(tr('אימון', 'Training'), accentTeal),
-                            _legendDot(tr('קבוע', 'Fixed'), Colors.purple),
-                          ],
+                        Text(
+                          _selectedType?['price'] != null
+                              ? tr('לחץ על שעה פנויה כדי להזמין · ₪${_selectedType!['price']} להזמנה',
+                                   'Tap a free time to book · ₪${_selectedType!['price']} per booking')
+                              : tr('לחץ על שעה פנויה כדי להזמין', 'Tap a free time to book'),
+                          style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: spaceMd),
                         if (visible.isEmpty)
@@ -8134,14 +8338,6 @@ class _BookingScreenState extends State<BookingScreen> {
     );
   }
 
-  Widget _legendDot(String label, Color color) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-      const SizedBox(width: 5),
-      Text(label, style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
-    ]);
-  }
-
   Widget _confirmRow(IconData icon, String label, String value) {
     return Row(children: [
       Icon(icon, color: textSecondary, size: 16),
@@ -8183,36 +8379,18 @@ class _SlotCard extends StatelessWidget {
     Color bgClr, brdClr, txtClr;
     String badge;
 
-    switch (status) {
-      case 'booked':
-        bgClr = colorWarning.withValues(alpha: 0.1);
-        brdClr = colorWarning.withValues(alpha: 0.3);
-        txtClr = colorWarning;
-        badge = isHebrew ? 'תפוס' : 'BOOKED';
-        break;
-      case 'blocked':
-        bgClr = colorError.withValues(alpha: 0.1);
-        brdClr = colorError.withValues(alpha: 0.3);
-        txtClr = colorError;
-        badge = isHebrew ? 'סגור' : 'CLOSED';
-        break;
-      case 'training':
-        bgClr = accentTeal.withValues(alpha: 0.1);
-        brdClr = accentTeal.withValues(alpha: 0.3);
-        txtClr = accentTeal;
-        badge = trainingName ?? (isHebrew ? 'אימון' : 'TRAINING');
-        break;
-      case 'fixed':
-        bgClr = Colors.purple.withValues(alpha: 0.12);
-        brdClr = Colors.purple.withValues(alpha: 0.4);
-        txtClr = Colors.purple;
-        badge = fixedReason ?? (isHebrew ? 'קבוע' : 'FIXED');
-        break;
-      default:
-        bgClr = cardColor;
-        brdClr = borderColor;
-        txtClr = textPrimary;
-        badge = isHebrew ? 'פנוי' : 'FREE';
+    // Players see two states only: free (green, tappable) or taken (dim).
+    // Why a time is taken (booking, training, fixed, closed) is the admin's business.
+    if (status == 'available') {
+      bgClr = accentGreen.withValues(alpha: 0.08);
+      brdClr = accentGreen.withValues(alpha: 0.6);
+      txtClr = accentGreen;
+      badge = isHebrew ? 'פנוי · להזמנה' : 'FREE · BOOK';
+    } else {
+      bgClr = cardColor.withValues(alpha: 0.4);
+      brdClr = borderColor.withValues(alpha: 0.5);
+      txtClr = textTertiary;
+      badge = isHebrew ? 'תפוס' : 'TAKEN';
     }
 
     return InkWell(
@@ -8231,7 +8409,9 @@ class _SlotCard extends StatelessWidget {
               label,
               textDirection: TextDirection.ltr,
               style: TextStyle(
-                color: txtClr, fontSize: 14, fontWeight: FontWeight.w800,
+                color: txtClr, fontSize: 15, fontWeight: FontWeight.w900,
+                decoration: status == 'available' ? null : TextDecoration.lineThrough,
+                decorationColor: txtClr,
               ),
             ),
             const SizedBox(height: 2),
@@ -8560,6 +8740,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
   Widget build(BuildContext context) => Scaffold(backgroundColor: bgColor, appBar: PlayerAppBar(title: tr('הצטרף למשחק','JOIN GAME')),
     body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(32), child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 400), child: Column(children: [
       Icon(Icons.group_add_outlined, color: accentGreen, size: 56), const SizedBox(height: 16),
+      if (_myName.trim().isNotEmpty)
       Container(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
         child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.person_outline, color: accentGreen, size: 16), const SizedBox(width: 6), Text('${tr('מצטרף כ','Joining as')}: $_myName', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13))])),
       const SizedBox(height: 28),
@@ -9130,6 +9311,20 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
     final user = FirebaseAuth.instance.currentUser;
     final myName = user?.displayName ?? user?.email ?? '';
     return Scaffold(backgroundColor: bgColor,
+      persistentFooterAlignment: AlignmentDirectional.center,
+      persistentFooterButtons: [
+        Semantics(
+          identifier: 'my_bookings_join_code',
+          button: true,
+          container: true,
+          child: TextButton.icon(
+            onPressed: () => openPlayerTab(context, 3),
+            icon: Icon(Icons.group_add_outlined, color: accentGreen, size: 18),
+            label: Text(tr('חבר שלח לך קוד? הצטרף למשחק', 'Got a code from a friend? Join the game'),
+              style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+          ),
+        ),
+      ],
       appBar: PlayerAppBar(
         title: tr('ההזמנות שלי','MY BOOKINGS'),
         bottom: TabBar(
