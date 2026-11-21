@@ -2014,6 +2014,7 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
   final courtSlots = defaultSlotsForStadium(court);
   String selectedTime = _slotLabel(courtSlots.first);
   bool saving = false;
+  String error = '';
 
   // Load booking types
   List<Map<String, dynamic>> bookingTypes = [];
@@ -2099,7 +2100,17 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
           const SizedBox(height: 10),
           Container(width: double.infinity, padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(8)),
-            child: Text('₪${selectedType?['price'] ?? price}/2hr', textAlign: TextAlign.center, style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+            child: Text(
+              courtHasOwnHours(court)
+                  ? _priceLabel((selectedType?['price'] ?? price) as int,
+                      _slotDurationMinutes(selectedTime.split(' - ')[0], selectedTime.split(' - ')[1]))
+                  : '₪${selectedType?['price'] ?? price}/2hr',
+              textAlign: TextAlign.center, style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+          if (error.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Semantics(identifier: 'manual_booking_error', container: true, child: Text(error,
+              style: TextStyle(color: colorError, fontWeight: FontWeight.w700, fontSize: 13))),
+          ],
           const SizedBox(height: 20),
           Row(children: [
             Expanded(child: TextButton(
@@ -2109,8 +2120,21 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
             const SizedBox(width: 8),
             Expanded(child: ElevatedButton(
               onPressed: saving ? null : () async {
-                if (nameCtrl.text.trim().isEmpty) return;
-                setS(() => saving = true);
+                if (nameCtrl.text.trim().isEmpty) {
+                  setS(() => error = tr('כתוב את שם הלקוח', "Enter the customer's name"));
+                  return;
+                }
+                setS(() { saving = true; error = ''; });
+                try {
+                // The same court, day and time can't be booked twice.
+                final taken = await FirebaseFirestore.instance.collection('bookings')
+                    .where('stadiumName', isEqualTo: stadiumName)
+                    .where('date', isEqualTo: selectedDate)
+                    .get();
+                if (taken.docs.any((d) => d.data()['time'] == selectedTime)) {
+                  setS(() { saving = false; error = tr('השעה הזו כבר תפוסה ביום הזה. בחר שעה אחרת.', 'That time is already booked on this day. Pick another.'); });
+                  return;
+                }
                 final code = (1000 + DateTime.now().millisecondsSinceEpoch % 9000).toString();
                 final dayName = days.firstWhere((d) => d['date'] == selectedDate)['name'] ?? '';
                 final typePrice = selectedType?['price'] ?? price;
@@ -2141,10 +2165,17 @@ void showManualBookingDialog(BuildContext context, String stadiumName, String st
                 setS(() => saving = false);
                 if (ctx.mounted) {
                   Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text(tr('ההזמנה נוספה! קוד: $code', 'Booking added! Code: $code')),
-                    backgroundColor: accentGreen, duration: const Duration(seconds: 4),
-                  ));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(tr('ההזמנה נוספה! קוד: $code', 'Booking added! Code: $code')),
+                      backgroundColor: accentGreen, duration: const Duration(seconds: 4),
+                    ));
+                  }
+                }
+                } catch (e) {
+                  // Shown in the window, so a failed save never looks like "nothing happened".
+                  debugPrint('Manual booking failed: $e');
+                  setS(() { saving = false; error = '${tr('לא נשמר', 'Not saved')}: $e'; });
                 }
               },
               style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor),
@@ -3329,6 +3360,9 @@ class SuperAdminScreen extends StatefulWidget {
   const SuperAdminScreen({super.key});
   @override State<SuperAdminScreen> createState() => _SuperAdminScreenState();
 }
+/// Widest the admin pages get; wider screens show them centred.
+const double kAdminMaxWidth = 720;
+
 /// The owner's screen: open clubs and courts, pick their admins, turn the
 /// kids school on. Bookings and reports belong to each court's admin.
 class _SuperAdminScreenState extends State<SuperAdminScreen> {
@@ -3346,7 +3380,10 @@ class _SuperAdminScreenState extends State<SuperAdminScreen> {
         ]),
       ),
     ),
-    body: const CourtsAdminTab(),
+    body: Center(child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: kAdminMaxWidth),
+      child: CourtsAdminTab(),
+    )),
   );
 }
 
@@ -5072,7 +5109,8 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AdminAppBar(title: _title((venue?['name'] as String?) ?? tr('ניהול המגרש', 'MY COURT'))),
-      body: Column(children: [
+      // On a computer the page stays phone-width in the middle of the screen.
+      body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: kAdminMaxWidth), child: Column(children: [
         if (courts.length > 1)
           SizedBox(
             height: 56,
@@ -5106,7 +5144,7 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
           ),
         _CourtSetupBar(court: court, onSaved: () => loadCatalog().then((_) { if (mounted) setState(() {}); })),
         Expanded(child: body),
-      ]),
+      ]))),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(color: cardColor, border: Border(top: BorderSide(color: borderColor))),
         child: SafeArea(
@@ -5739,6 +5777,12 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
     ));
   }
 
+  static String monthBookingsLabel(int n) => switch (n) {
+        0 => tr('אין הזמנות החודש', 'No bookings this month'),
+        1 => tr('הזמנה אחת החודש', '1 booking this month'),
+        _ => tr('$n הזמנות החודש', '$n bookings this month'),
+      };
+
   Widget _statusChip(String text, Color color) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusSm)),
@@ -5779,7 +5823,7 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
                 courtIsReady(court) ? accentGreen : colorWarning,
               ),
               if (_monthCount != null)
-                _statusChip(tr('${_monthCount![court['name']] ?? 0} הזמנות החודש', '${_monthCount![court['name']] ?? 0} bookings this month'), colorInfo),
+                _statusChip(monthBookingsLabel(_monthCount![court['name']] ?? 0), colorInfo),
             ]),
           ),
           const SizedBox(height: spaceSm),
@@ -5883,7 +5927,20 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
           ),
           const SizedBox(height: spaceMd),
           for (final v in venues) ...[
-            _secTitle('${v['name']} • ${isHebrew ? v['region'] : v['regionEn'] ?? v['region']}'),
+            Padding(
+              padding: const EdgeInsets.only(top: spaceSm),
+              child: Row(children: [
+                Icon(Icons.storefront_outlined, color: accentGreen, size: 22),
+                const SizedBox(width: 8),
+                Flexible(child: Text(v['name'] as String,
+                  style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900))),
+                const SizedBox(width: 8),
+                Icon(Icons.place_outlined, color: textSecondary, size: 15),
+                const SizedBox(width: 2),
+                Text('${isHebrew ? v['region'] : v['regionEn'] ?? v['region']}',
+                  style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+              ]),
+            ),
             Semantics(
               identifier: 'venue_school_switch_${v['id']}',
               container: true,
