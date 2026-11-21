@@ -67,7 +67,7 @@ const String kSportTennis   = 'Tennis';
 /// (2h default slots, 60/90/120 options, 18-player display cap) so football
 /// screens stay identical; only padel/tennis read the other entries.
 const Map<String, Map<String, dynamic>> sportDefaults = {
-  kSportFootball: {'slotOptions': [60, 90, 120], 'defaultSlotMinutes': 120, 'maxPlayers': null},
+  kSportFootball: {'slotOptions': [60, 90, 120], 'defaultSlotMinutes': 120, 'maxPlayers': 15},
   kSportPadel:    {'slotOptions': [60, 90, 120], 'defaultSlotMinutes': 90,  'maxPlayers': 4},
   kSportTennis:   {'slotOptions': [60, 90, 120], 'defaultSlotMinutes': 60,  'maxPlayers': 4, 'singlesPlayers': 2},
 };
@@ -79,6 +79,11 @@ String sportOf(Map<String, dynamic>? stadium) {
 }
 
 bool isRacketSport(String sport) => sport == kSportPadel || sport == kSportTennis;
+
+/// Most players in one booking on this court: the court admin's setting,
+/// else 4 for padel/tennis and 15 for football.
+int courtMaxPlayers(Map<String, dynamic>? court) =>
+    (court?['maxPlayers'] as num?)?.toInt() ?? (sportDefaults[sportOf(court)]!['maxPlayers'] as int);
 
 /// Sports offered by a venue, derived from its courts.
 Set<String> sportsOfVenue(Map<String, dynamic> venue) {
@@ -1948,7 +1953,7 @@ void showBookingDetails(BuildContext context, Map<String,dynamic> b, {bool isAdm
       _detailRow(Icons.tag, tr('קוד','Code'), b['bookingCode']??''),
       const SizedBox(height: 12),
       Divider(color: borderColor), const SizedBox(height: 8),
-      Text(tr('שחקנים (${players.length}/${b['maxPlayers'] ?? 18})','Players (${players.length}/${b['maxPlayers'] ?? 18})'),
+      Text(tr('שחקנים (${players.length}/${b['maxPlayers'] ?? 15})','Players (${players.length}/${b['maxPlayers'] ?? 15})'),
         style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)),
       const SizedBox(height: 8),
       Wrap(spacing: 6, runSpacing: 6, children: players.map((p) =>
@@ -2146,10 +2151,8 @@ Future<void> showManualBookingDialog(BuildContext context, String stadiumName, S
                   'day': dayName, 'date': selectedDate, 'time': selectedTime,
                   'price': courtHasOwnHours(court) ? _priceLabel(typePrice as int, slotMins) : '₪$typePrice/2hr', 'bookingCode': code,
                   if (courtHasOwnHours(court)) 'durationMinutes': slotMins,
-                  if (isRacketSport(courtSport)) ...{
-                    'sport': courtSport,
-                    'maxPlayers': sportDefaults[courtSport]!['maxPlayers'],
-                  },
+                  'maxPlayers': courtMaxPlayers(court),
+                  if (isRacketSport(courtSport)) 'sport': courtSport,
                   if (court?['isDemo'] == true) 'isDemo': true,
                   'players': [nameCtrl.text.trim()],
                   'createdAt': DateTime.now().toIso8601String(), 'isManual': true,
@@ -3412,7 +3415,7 @@ Widget _adminBookCard(Map<String,dynamic> b, {required String docId, required Bu
           Expanded(child: Text(phone, style: TextStyle(color: accentGreen, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis)),
         ]),
         const SizedBox(height: 4),
-        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 15} ${tr('שחקנים','players')}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
@@ -4464,7 +4467,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                             onTap: () => showBookingDetails(context, bookingData, isAdmin: true, docId: match.first.id),
                             child: Row(children: [
                               if (phone.isNotEmpty) ...[Text(phone, style: TextStyle(color: accentGreen, fontSize: 11)), const SizedBox(width: 4)],
-                              Text('$count/${bookingData['maxPlayers'] ?? 18}', style: TextStyle(color: textSecondary, fontSize: 12)),
+                              Text('$count/${bookingData['maxPlayers'] ?? 15}', style: TextStyle(color: textSecondary, fontSize: 12)),
                               const SizedBox(width: 4),
                               Icon(Icons.info_outline, color: accentGreen, size: 16),
                             ]),
@@ -4802,6 +4805,7 @@ class _CourtSetupBar extends StatelessWidget {
       if (price != null) '₪$price / ${tr('שעה', 'hour')}',
       '${court['openTime'] ?? '08:00'}–${court['closeTime'] ?? '23:00'}',
       slotLengthLabel((court['slotMinutes'] as int?) ?? (sportDefaults[sportOf(court)]!['defaultSlotMinutes'] as int)),
+      tr('עד ${courtMaxPlayers(court)} שחקנים', 'up to ${courtMaxPlayers(court)} players'),
     ].join('  ·  ');
     return Padding(
       padding: const EdgeInsets.fromLTRB(spaceMd, spaceSm, spaceMd, 0),
@@ -4849,6 +4853,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _priceCtrl;
   late int _slotMinutes;
+  late int _maxPlayers;
   late String _open;
   late String _close;
   bool _saving = false;
@@ -4858,6 +4863,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   void initState() {
     super.initState();
     final c = widget.court;
+    _maxPlayers = courtMaxPlayers(c);
     final p = (c['pricePerHour'] as num?)?.round();
     _priceCtrl = TextEditingController(text: p?.toString() ?? '');
     final options = (sportDefaults[sportOf(c)]!['slotOptions'] as List).cast<int>();
@@ -4911,6 +4917,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
         'openTime': _open,
         'closeTime': _close,
         'slotMinutes': _slotMinutes,
+        'maxPlayers': _maxPlayers,
       }).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -4965,6 +4972,28 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
                     'Price for ${slotLengthLabel(_slotMinutes)}: ₪${_priceForSlot(price, _slotMinutes)}'),
               style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w700)),
           ],
+          const SizedBox(height: spaceLg),
+          choiceLabel(tr('כמה שחקנים בהזמנה אחת?', 'How many players per booking?')),
+          Semantics(identifier: 'court_settings_players', container: true, child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: spaceSm, vertical: 6),
+            decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusMd), border: Border.all(color: borderColor)),
+            child: Row(children: [
+              IconButton(
+                onPressed: _maxPlayers > 2 ? () => setState(() => _maxPlayers--) : null,
+                icon: Icon(Icons.remove_circle_outline, color: _maxPlayers > 2 ? accentGreen : textTertiary, size: 30),
+              ),
+              Expanded(child: Text(tr('$_maxPlayers שחקנים', '$_maxPlayers players'), textAlign: TextAlign.center,
+                style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900))),
+              IconButton(
+                onPressed: _maxPlayers < 30 ? () => setState(() => _maxPlayers++) : null,
+                icon: Icon(Icons.add_circle_outline, color: _maxPlayers < 30 ? accentGreen : textTertiary, size: 30),
+              ),
+            ]),
+          )),
+          const SizedBox(height: 4),
+          Text(tr('ההזמנה מתמלאת כשמגיעים למספר הזה. ברירת מחדל: פאדל וטניס 4, כדורגל 15.',
+                  'A booking is full at this number. Default: padel and tennis 4, football 15.'),
+            style: TextStyle(color: textSecondary, fontSize: 12)),
           const SizedBox(height: spaceLg),
           choiceLabel(tr('שעות פתיחה', 'Opening hours')),
           Row(children: [
@@ -6461,9 +6490,39 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
   void initState() {
     super.initState();
     // Courts the owner added or removed show up without a new release.
-    loadCatalog().then((_) { if (mounted) setState(() {}); });
+    loadCatalog().then((_) { if (mounted) setState(() {}); _pickStartCity(); });
     WidgetsBinding.instance.addObserver(this);
     _checkVerified();
+  }
+
+  /// Opens on the city chosen last time, else the city in the profile, as
+  /// long as there are courts there. "All cities" is one tap away.
+  Future<void> _pickStartCity() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cities = {for (final v in venues.where(venueIsReady)) venueCityKey(v)};
+      if (prefs.containsKey('homeCity')) {
+        final saved = prefs.getString('homeCity') ?? '';
+        if (mounted) setState(() => _cityFilter = cities.contains(saved) ? saved : null);
+        return;
+      }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null || user.isAnonymous) return;
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final mine = ((doc.data()?['city'] as String?) ?? '').trim();
+      if (mine.isEmpty) return;
+      for (final v in venues.where(venueIsReady)) {
+        if (v['region'] == mine || v['regionEn'] == mine) {
+          if (mounted) setState(() => _cityFilter = venueCityKey(v));
+          return;
+        }
+      }
+    } catch (_) {/* stay on all cities */}
+  }
+
+  void _setCity(String? c) {
+    setState(() => _cityFilter = c);
+    SharedPreferences.getInstance().then((p) => p.setString('homeCity', c ?? '')).catchError((_) => false);
   }
 
   @override
@@ -6824,7 +6883,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                           _CityFilterChips(
                             cities: allCities,
                             selected: _cityFilter,
-                            onSelected: (c) => setState(() => _cityFilter = c),
+                            onSelected: _setCity,
                           ),
 
                         if (readyVenues.isEmpty)
@@ -7548,16 +7607,13 @@ class _BookingScreenState extends State<BookingScreen> {
 
   String get _sport => sportOf(widget.stadium);
 
-  /// Max players for a new booking: null for football (unchanged behaviour),
-  /// 4 for padel, 2/4 for tennis singles/doubles.
-  int? get _maxPlayersForBooking {
-    if (_sport == kSportPadel) return sportDefaults[kSportPadel]!['maxPlayers'] as int;
-    if (_sport == kSportTennis) {
-      return _tennisDoubles
-          ? sportDefaults[kSportTennis]!['maxPlayers'] as int
-          : sportDefaults[kSportTennis]!['singlesPlayers'] as int;
+  /// Max players for a new booking: the court's setting (default 4 for
+  /// padel/tennis, 15 for football); tennis singles is always 2.
+  int get _maxPlayersForBooking {
+    if (_sport == kSportTennis && !_tennisDoubles) {
+      return sportDefaults[kSportTennis]!['singlesPlayers'] as int;
     }
-    return null;
+    return courtMaxPlayers(widget.stadium);
   }
   List<Map<String, dynamic>> _trainingGroups = [];
   List<Map<String, dynamic>> _recurringBlocks = [];
@@ -7779,7 +7835,7 @@ class _BookingScreenState extends State<BookingScreen> {
                         Semantics(
                           identifier: 'booking_players_count',
                           container: true,
-                          child: _confirmRow(Icons.group_outlined, tr('מקסימום שחקנים', 'Max players'), '${_maxPlayersForBooking ?? ''}'),
+                          child: _confirmRow(Icons.group_outlined, tr('מקסימום שחקנים', 'Max players'), '$_maxPlayersForBooking'),
                         ),
                       ])),
                     ],
@@ -7948,10 +8004,9 @@ class _BookingScreenState extends State<BookingScreen> {
       'bookingCode': code,
       'players': [myName],
       'createdAt': DateTime.now().toIso8601String(),
-      // Padel/tennis only — football booking docs are written exactly as before.
+      'maxPlayers': _maxPlayersForBooking,
       if (isRacketSport(_sport)) ...{
         'sport': _sport,
-        'maxPlayers': _maxPlayersForBooking,
         if (_sport == kSportTennis) 'format': _tennisDoubles ? 'doubles' : 'singles',
       },
       if (widget.stadium['isDemo'] == true) 'isDemo': true,
@@ -8770,7 +8825,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
             Text('${_booking!['day']} ${_booking!['date']} • ${_booking!['time']}', style: TextStyle(color: textSecondary, fontSize: 13)),
             Text('${tr('מארגן','Organizer')}: ${_booking!['userName']??''}', style: TextStyle(color: textSecondary, fontSize: 12)),
             const SizedBox(height: 8),
-            Semantics(identifier: 'join_players_count', container: true, child: Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/${_booking!['maxPlayers'] ?? 18}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
+            Semantics(identifier: 'join_players_count', container: true, child: Text('${tr('שחקנים','Players')}: ${(_booking!['players'] as List?)?.length??0}/${_booking!['maxPlayers'] ?? 15}', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold))),
           ])),
         const SizedBox(height: 14),
         if (_success.isEmpty) ...[
@@ -8938,7 +8993,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: _statCard(tr('מגרשים', 'STADIUMS'), '${allStadiums.length}', Icons.sports_soccer, Colors.blue),
+                      child: _statCard(tr('מגרשים ששיחקת בהם', 'COURTS PLAYED'),
+                        '${{for (final d in bookingsSnap?.docs ?? const []) (d.data() as Map<String, dynamic>)['stadiumName']}.length}',
+                        Icons.sports_soccer, Colors.blue),
                     ),
                   ],
                 ),
@@ -9095,6 +9152,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       initialDate: initial,
       firstDate: DateTime(1920),
       lastDate: DateTime(now.year - 5),
+      // Start on the year list: picking 2000 is one tap, not 25 years of months.
+      initialDatePickerMode: DatePickerMode.year,
       builder: (ctx, child) => Theme(
         data: appThemeData(),
         child: child!,
@@ -9184,16 +9243,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                           validator: (v) => (v == null || v.trim().isEmpty) ? tr('שדה חובה', 'Required') : null,
                         ),
                         const SizedBox(height: spaceMd),
-                        appTextField(
-                          controller: _dobCtrl,
-                          label: tr('תאריך לידה (DD/MM/YYYY)', 'Date of Birth (DD/MM/YYYY)'),
-                          icon: Icons.cake_outlined,
-                          readOnly: true,
-                          onTap: _pickDob,
-                        ),
-                        const SizedBox(height: spaceMd),
-                        _genderDropdown(),
-                        const SizedBox(height: spaceMd),
+                        // Finishing sign-up asks only what booking needs.
+                        if (!widget.completing) ...[
+                          appTextField(
+                            controller: _dobCtrl,
+                            label: tr('תאריך לידה (לא חובה)', 'Date of birth (optional)'),
+                            icon: Icons.cake_outlined,
+                            readOnly: true,
+                            onTap: _pickDob,
+                          ),
+                          const SizedBox(height: spaceMd),
+                          _genderDropdown(),
+                          const SizedBox(height: spaceMd),
+                        ],
                         CityField(
                           controller: _cityCtrl,
                           label: tr('עיר', 'City'),
@@ -9429,7 +9491,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             Row(children: [Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'', textDirection: TextDirection.ltr,style:TextStyle(color:textSecondary,fontSize:12))]),
             const SizedBox(height: 4),
             Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
-            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 18}', style: TextStyle(color: textSecondary, fontSize: 12))],
+            if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 15}', style: TextStyle(color: textSecondary, fontSize: 12))],
             if (!isPast) ...[
               const SizedBox(height: 12),
               if (isOrg) SizedBox(width: double.infinity, child: TextButton(onPressed: canCancel?() async {
@@ -11727,7 +11789,7 @@ Widget _bookCard(Map<String,dynamic> b, {BuildContext? context}) {
         const SizedBox(height: 6),
         Text('${b['userName']??''} • ${b['day']} ${b['date']} • ${b['time']}', style: TextStyle(color: textSecondary, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
         const SizedBox(height: 4),
-        Text('${players.length}/${b['maxPlayers'] ?? 18} ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text('${players.length}/${b['maxPlayers'] ?? 15} ${tr('שחקנים','players')}${players.isNotEmpty?': ${players.join(', ')}':''}', style: TextStyle(color: textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ])),
   );
 }
