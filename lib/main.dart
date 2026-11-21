@@ -1107,8 +1107,8 @@ class GuestGate extends StatelessWidget {
 // DESIGN SYSTEM - STADIUM v1.0
 // ====================================================
 
-// Colors. Dark is the original look; the choice is saved per device.
-bool isLightMode = false;
+// Colors. Light is the default look; dark is one tap away and the choice is saved per device.
+bool isLightMode = true;
 Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : 0xFF000000);
 Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : 0xFF0F0F0F);
 Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : 0xFF1A1A1A);
@@ -2216,7 +2216,7 @@ void main() async {
   }
   try {
     final prefs = await SharedPreferences.getInstance();
-    isLightMode = prefs.getBool('lightMode') ?? false;
+    isLightMode = prefs.getBool('lightMode') ?? true;
     seenWelcome = prefs.getBool('seenWelcome') ?? false;
   } catch (_) {/* keep the default look */}
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
