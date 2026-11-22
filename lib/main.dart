@@ -5819,7 +5819,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
               onChanged: (v) => setState(() => _search = v),
               style: TextStyle(color: textPrimary, fontSize: 14),
               decoration: InputDecoration(
-                hintText: tr('חיפוש לפי שם או טלפון', 'Search by name or phone'),
+                hintText: tr('חיפוש לפי שם, טלפון או קוד הזמנה', 'Search by name, phone or booking code'),
                 hintStyle: TextStyle(color: textTertiary, fontSize: 13),
                 prefixIcon: Icon(Icons.search, color: textSecondary, size: 20),
                 suffixIcon: _search.isEmpty ? null : IconButton(

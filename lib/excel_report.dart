@@ -259,7 +259,8 @@ List<int>? buildBookingsReport(List<Map<String, dynamic>> bookings, {required bo
   }
 
   ex.setDefaultSheet(sheetName);
-  final bytes = ex.save();
+  // encode(), not save(): on the web save() also starts its own download.
+  final bytes = ex.encode();
   if (bytes == null || !hebrew) return bytes;
   // The excel package writes right-to-left only for sheets already in the
   // file, so the saved workbook is opened once more to set it.
@@ -267,5 +268,5 @@ List<int>? buildBookingsReport(List<Map<String, dynamic>> bookings, {required bo
   for (final name in again.tables.keys) {
     again[name].isRTL = true;
   }
-  return again.save();
+  return again.encode();
 }
