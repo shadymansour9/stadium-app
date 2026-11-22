@@ -97,7 +97,14 @@ service cloud.firestore {
       allow update: if managesStadium(stadiumId)
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['pricePerHour', 'price', 'openTime', 'closeTime', 'slotMinutes', 'maxPlayers', 'contactPhone',
-                       'payCash', 'payPaybox', 'payboxLink']);
+                       'payCash', 'payPaybox', 'payboxLink', 'address', 'mapsLink', 'amenities', 'thumb']);
+    }
+
+    // A court's photos (base64 JPEG): anyone signed in sees them; the
+    // owner and the court's admin change them.
+    match /court_photos/{courtId} {
+      allow read:  if isSignedIn();
+      allow write: if isAdmin() || managesStadium(courtId);
     }
 
     // Which courts each admin manages. Doc id is the lowercased email.
