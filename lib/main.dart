@@ -8249,8 +8249,8 @@ class _VenueCard extends StatelessWidget {
           if (priceText != null)
             Semantics(identifier: 'venue_price_$id', container: true, child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-              child: Text(priceText, style: const TextStyle(color: Color(0xFF0A7D2C), fontSize: 13, fontWeight: FontWeight.w900)),
+              decoration: BoxDecoration(color: isLightMode ? Colors.white : accentGreen, borderRadius: BorderRadius.circular(20)),
+              child: Text(priceText, style: TextStyle(color: isLightMode ? const Color(0xFF0A7D2C) : onAccent, fontSize: 13, fontWeight: FontWeight.w900)),
             )),
         ])),
       ]),
