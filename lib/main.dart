@@ -424,6 +424,7 @@ class _PlayerShellState extends State<PlayerShell> {
             child: Row(children: [
               _item(0, 'tab_home', Icons.home_rounded, tr('בית', 'Home')),
               _item(1, 'tab_bookings', Icons.calendar_month_rounded, tr('ההזמנות שלי', 'My bookings')),
+              _item(3, 'tab_join', Icons.group_add_rounded, tr('הצטרף', 'Join')),
               _item(2, 'tab_school', Icons.school_rounded, tr('בית ספר', 'School')),
               _item(4, 'tab_profile', Icons.person_rounded, tr('פרופיל', 'Profile')),
             ]),
@@ -2406,8 +2407,10 @@ void main() async {
   // Reads are served from local cache when offline, and writes are queued
   // until connectivity is restored. CACHE_SIZE_UNLIMITED keeps everything
   // we've ever read on disk for instant subsequent loads.
+  // Not on the web: IndexedDB on iPhone Safari made reads hang for a long
+  // time (court photos are large docs); the web reads straight from the server.
   FirebaseFirestore.instance.settings = const Settings(
-    persistenceEnabled: true,
+    persistenceEnabled: !kIsWeb,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
 
@@ -10467,10 +10470,12 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
   void _refresh() {
     final user = FirebaseAuth.instance.currentUser;
     final myName = user?.displayName ?? user?.email ?? '';
+    final col = FirebaseFirestore.instance.collection('bookings');
     _future = Future.wait([
-      FirebaseFirestore.instance.collection('bookings').where('userId', isEqualTo: user?.uid).get(),
-      FirebaseFirestore.instance.collection('bookings').where('players', arrayContains: myName).get(),
-    ]);
+      col.where('userId', isEqualTo: user?.uid).get(),
+      if (myName.isNotEmpty) col.where('players', arrayContains: myName).get(),
+      if (user != null) col.where('playerIds', arrayContains: user.uid).get(),
+    ]).timeout(const Duration(seconds: 20));
   }
 
   Future<void> _cancelBooking(String docId) async {
@@ -10519,20 +10524,6 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
     final user = FirebaseAuth.instance.currentUser;
     final myName = user?.displayName ?? user?.email ?? '';
     return Scaffold(backgroundColor: bgColor,
-      persistentFooterAlignment: AlignmentDirectional.center,
-      persistentFooterButtons: [
-        Semantics(
-          identifier: 'my_bookings_join_code',
-          button: true,
-          container: true,
-          child: TextButton.icon(
-            onPressed: () => openPlayerTab(context, 3),
-            icon: Icon(Icons.group_add_outlined, color: accentGreen, size: 18),
-            label: Text(tr('חבר שלח לך קוד? הצטרף למשחק', 'Got a code from a friend? Join the game'),
-              style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
-          ),
-        ),
-      ],
       appBar: PlayerAppBar(
         title: tr('ההזמנות שלי','MY BOOKINGS'),
         bottom: TabBar(
@@ -10551,10 +10542,20 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
           future: _future,
           builder: (ctx, AsyncSnapshot<List<QuerySnapshot>> snap) {
           if (snap.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator(color: accentGreen));
-          if (!snap.hasData) return Center(child: Text(tr('שגיאה','Error'), style: const TextStyle(color: Colors.red)));
+          if (!snap.hasData) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.wifi_off_rounded, color: mutedIcon, size: 56),
+            const SizedBox(height: 12),
+            Text(tr('לא הצלחנו לטעון את ההזמנות', "Couldn't load your bookings"), style: TextStyle(color: textSecondary, fontSize: 15)),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () => setState(_refresh),
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: onAccent, iconColor: onAccent),
+              icon: const Icon(Icons.refresh_rounded),
+              label: Text(tr('נסה שוב', 'Try again')),
+            ),
+          ]));
           final Map<String, QueryDocumentSnapshot> map = {};
-          for (final d in snap.data![0].docs) map[d.id]=d;
-          for (final d in snap.data![1].docs) map[d.id]=d;
+          for (final q in snap.data!) { for (final d in q.docs) map[d.id] = d; }
           final docs = map.values.toList();
           final now = DateTime.now();
           final upcoming = <QueryDocumentSnapshot>[];
