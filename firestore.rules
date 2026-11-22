@@ -64,13 +64,18 @@ service cloud.firestore {
     // 2) BOOKINGS - signed-in users see availability and join with codes.
     match /bookings/{bookingId} {
       allow read:   if isSignedIn();
-      allow create: if isMember() && withinMaxPlayers();
+      allow create: if isMember() && withinMaxPlayers()
+        && (isAdmin() || managesStadium(request.resource.data.get('stadiumId', ''))
+            || request.resource.data.get('paymentStatus', 'unpaid') == 'unpaid');
       allow update: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
         || managesStadium(resource.data.get('stadiumId', ''))
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players', 'playerIds'])
-      ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()));
+      ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()))
+        // Paid / not paid is the court admin's call, not the player's.
+        && (isAdmin() || managesStadium(resource.data.get('stadiumId', ''))
+            || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['paymentStatus', 'paidAt']));
       allow delete: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
@@ -90,7 +95,8 @@ service cloud.firestore {
       // The court's admin sets its price, opening hours and booking length.
       allow update: if managesStadium(stadiumId)
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['pricePerHour', 'price', 'openTime', 'closeTime', 'slotMinutes', 'maxPlayers', 'contactPhone']);
+             .hasOnly(['pricePerHour', 'price', 'openTime', 'closeTime', 'slotMinutes', 'maxPlayers', 'contactPhone',
+                       'payCash', 'payPaybox', 'payboxLink']);
     }
 
     // Which courts each admin manages. Doc id is the lowercased email.
