@@ -8428,7 +8428,7 @@ class _BookingScreenState extends State<BookingScreen> {
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(tr('מחיר', 'Price'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
             Text('₪$price', style: TextStyle(color: textPrimary, fontSize: 26, fontWeight: FontWeight.w900, height: 1.1)),
-            Text('${_selDay == 0 ? tr('היום', 'Today') : _selDay == 1 ? tr('מחר', 'Tomorrow') : _days[_selDay]['name']} ${_days[_selDay]['date']} · $label',
+            Text('${_selDay == 0 ? tr('היום', 'Today') : _selDay == 1 ? tr('מחר', 'Tomorrow') : _days[_selDay]['name']} ${_days[_selDay]['date']} · \u200E$label',
               style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
           ])),
           Semantics(identifier: 'book_now', button: true, container: true, child: SizedBox(height: 54, child: ElevatedButton.icon(
