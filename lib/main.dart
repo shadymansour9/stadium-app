@@ -1334,20 +1334,27 @@ class GuestGate extends StatelessWidget {
 // DESIGN SYSTEM - STADIUM v1.0
 // ====================================================
 
-// Colors. Light is the default look; dark is one tap away and the choice is saved per device.
-bool isLightMode = true;
-Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : 0xFF000000);
-Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : 0xFF0F0F0F);
-Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : 0xFF1A1A1A);
-Color get borderColor => Color(isLightMode ? 0xFFDDE1E6 : 0xFF2A2A2A);
-Color get borderActive => Color(isLightMode ? 0xFFC4CAD1 : 0xFF3A3A3A);
+// Colors. The default look is dark olive with a lime accent; light is one
+// tap away and the choice is saved per device.
+bool isLightMode = false;
+Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : 0xFF13150F);
+Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : 0xFF191C14);
+Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : 0xFF22261B);
+Color get borderColor => Color(isLightMode ? 0xFFDDE1E6 : 0xFF333A29);
+Color get borderActive => Color(isLightMode ? 0xFFC4CAD1 : 0xFF48513A);
 
-Color get accentGreen => Color(isLightMode ? 0xFF00843D : 0xFF00C853);
-Color get accentGreenSoft => Color(isLightMode ? 0x3300843D : 0x3300C853);
+Color get accentGreen => Color(isLightMode ? 0xFF00843D : 0xFFC6E06A);
+Color get accentGreenSoft => Color(isLightMode ? 0x3300843D : 0x33C6E06A);
+/// Text and icons on top of the accent (white on green, dark on lime).
+Color get onAccent => Color(isLightMode ? 0xFFFFFFFF : 0xFF1A1D12);
+/// Cover for courts without a photo.
+List<Color> get coverGradient => isLightMode
+    ? [const Color(0xFF00843D), const Color(0xFF3FA66B)]
+    : [const Color(0xFF3E4C1F), const Color(0xFF1C2213)];
 
-Color get textPrimary => Color(isLightMode ? 0xFF14181D : 0xFFFFFFFF);
-Color get textSecondary => Color(isLightMode ? 0xFF566070 : 0xFF9E9E9E);
-Color get textTertiary => Color(isLightMode ? 0xFF7A8391 : 0xFF616161);
+Color get textPrimary => Color(isLightMode ? 0xFF14181D : 0xFFF1F3EA);
+Color get textSecondary => Color(isLightMode ? 0xFF566070 : 0xFFA6AD98);
+Color get textTertiary => Color(isLightMode ? 0xFF7A8391 : 0xFF6F7765);
 
 Color get colorError => Color(isLightMode ? 0xFFD32F2F : 0xFFF44336);
 Color get colorWarning => Color(isLightMode ? 0xFFB85C00 : 0xFFFF9800);
@@ -1355,9 +1362,9 @@ Color get colorInfo => Color(isLightMode ? 0xFF1565C0 : 0xFF2196F3);
 Color get accentAmber => Color(isLightMode ? 0xFF9A6200 : 0xFFFFC107);
 Color get accentOrange => Color(isLightMode ? 0xFFB45309 : 0xFFF59E0B);
 Color get accentTeal => Color(isLightMode ? 0xFF0F766E : 0xFF14B8A6);
-Color get mutedIcon => Color(isLightMode ? 0xFFC4CAD1 : 0xFF333333);
-Color get bgMuted => Color(isLightMode ? 0xFFECEEF1 : 0xFF111111);
-Color get gradientEnd => Color(isLightMode ? 0xFFFFFFFF : 0xFF0D0D0D);
+Color get mutedIcon => Color(isLightMode ? 0xFFC4CAD1 : 0xFF3A4130);
+Color get bgMuted => Color(isLightMode ? 0xFFECEEF1 : 0xFF181B12);
+Color get gradientEnd => Color(isLightMode ? 0xFFFFFFFF : 0xFF181B12);
 
 /// Also used for date pickers, which are shown outside the screens' own colours.
 ThemeData appThemeData() {
@@ -1365,8 +1372,14 @@ ThemeData appThemeData() {
   return base.copyWith(
     scaffoldBackgroundColor: bgColor,
     colorScheme: isLightMode
-        ? ColorScheme.light(primary: accentGreen, surface: cardColor, onPrimary: bgColor, outlineVariant: borderColor)
-        : ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: bgColor),
+        ? ColorScheme.light(primary: accentGreen, surface: cardColor, onPrimary: onAccent, outlineVariant: borderColor)
+        : ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: onAccent, outlineVariant: borderColor),
+    // Snack bars sit on the accent / status colours: dark text reads on lime.
+    snackBarTheme: SnackBarThemeData(
+      contentTextStyle: TextStyle(color: isLightMode ? Colors.white : const Color(0xFF14160F),
+        fontFamily: 'Heebo', fontWeight: FontWeight.w700),
+      behavior: SnackBarBehavior.floating,
+    ),
     // 'Heebo' supports both Hebrew and Latin glyphs; loaded from Google
     // Fonts in web/index.html. On native platforms it falls back to the
     // system font (which is fine for Hebrew on Android/iOS).
@@ -2355,7 +2368,7 @@ void main() async {
   }
   try {
     final prefs = await SharedPreferences.getInstance();
-    isLightMode = prefs.getBool('lightMode') ?? true;
+    isLightMode = prefs.getBool('lightMode') ?? false;
     seenWelcome = prefs.getBool('seenWelcome') ?? false;
   } catch (_) {/* keep the default look */}
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -5221,7 +5234,7 @@ class _CourtPhotosEditorState extends State<CourtPhotosEditor> {
                   PositionedDirectional(top: 6, start: 6, child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(10)),
-                    child: Text(tr('תמונה ראשית', 'Cover'), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+                    child: Text(tr('תמונה ראשית', 'Cover'), style: TextStyle(color: onAccent, fontSize: 11, fontWeight: FontWeight.w800)),
                   ))
                 else
                   PositionedDirectional(top: 4, start: 4, child: Material(
@@ -5544,12 +5557,12 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
               FilterChip(
                 selected: _amenities.contains(e.key),
                 onSelected: (v) => setState(() => v ? _amenities.add(e.key) : _amenities.remove(e.key)),
-                avatar: Icon(e.value.$3, size: 16, color: _amenities.contains(e.key) ? Colors.white : accentGreen),
+                avatar: Icon(e.value.$3, size: 16, color: _amenities.contains(e.key) ? onAccent : accentGreen),
                 label: Text(tr(e.value.$1, e.value.$2)),
                 showCheckmark: false,
                 selectedColor: accentGreen,
                 backgroundColor: cardColor,
-                labelStyle: TextStyle(color: _amenities.contains(e.key) ? Colors.white : textPrimary, fontWeight: FontWeight.w700),
+                labelStyle: TextStyle(color: _amenities.contains(e.key) ? onAccent : textPrimary, fontWeight: FontWeight.w700),
                 side: BorderSide(color: _amenities.contains(e.key) ? accentGreen : borderColor),
               ),
           ])),
@@ -8211,9 +8224,9 @@ class _VenueCard extends StatelessWidget {
           Container(
             decoration: BoxDecoration(gradient: LinearGradient(
               begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
-              colors: [accentGreen, accentGreen.withValues(alpha: 0.55)],
+              colors: coverGradient,
             )),
-            child: Center(child: Icon(sportIcon(sport), size: 64, color: Colors.white.withValues(alpha: 0.9))),
+            child: Center(child: Icon(sportIcon(sport), size: 64, color: isLightMode ? Colors.white.withValues(alpha: 0.9) : accentGreen)),
           ),
         // Dark fade at the bottom so the name stays readable on any photo.
         const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
@@ -8286,7 +8299,7 @@ class _VenueCard extends StatelessWidget {
                     onPressed: onTap,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: accentGreen,
-                      foregroundColor: Colors.white, iconColor: Colors.white,
+                      foregroundColor: onAccent, iconColor: onAccent,
                       elevation: 0,
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
@@ -8435,10 +8448,10 @@ class _BookingScreenState extends State<BookingScreen> {
           Container(
             decoration: BoxDecoration(gradient: LinearGradient(
               begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
-              colors: [accentGreen, accentGreen.withValues(alpha: 0.55)],
+              colors: coverGradient,
             )),
             child: Align(alignment: const Alignment(0, -0.3),
-              child: Icon(sportIcon(sport), size: 72, color: Colors.white.withValues(alpha: 0.9))),
+              child: Icon(sportIcon(sport), size: 72, color: isLightMode ? Colors.white.withValues(alpha: 0.9) : accentGreen)),
           )
         else
           PageView.builder(
@@ -8507,7 +8520,7 @@ class _BookingScreenState extends State<BookingScreen> {
             icon: const Icon(Icons.check_circle_outline, size: 20),
             label: Text(tr('הזמן עכשיו', 'Book now'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: accentGreen, foregroundColor: Colors.white, iconColor: Colors.white, elevation: 0,
+              backgroundColor: accentGreen, foregroundColor: onAccent, iconColor: onAccent, elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 26),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
             ),
@@ -9330,7 +9343,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                       Text(
                                         i == 0 ? tr('היום', 'Today') : i == 1 ? tr('מחר', 'Tmrw') : d['name'] as String,
                                         style: TextStyle(
-                                          color: selected ? Colors.white : textSecondary,
+                                          color: selected ? onAccent : textSecondary,
                                           fontSize: 11, fontWeight: FontWeight.w700,
                                           letterSpacing: isHebrew ? 0 : 1,
                                         ),
@@ -9339,7 +9352,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                       Text(
                                         (d['date'] as String).split('/').first,
                                         style: TextStyle(
-                                          color: selected ? Colors.white : textPrimary,
+                                          color: selected ? onAccent : textPrimary,
                                           fontSize: 24, fontWeight: FontWeight.w900, height: 1.1,
                                         ),
                                       ),
@@ -9347,7 +9360,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                         '/${(d['date'] as String).split('/').last}',
                                         textDirection: TextDirection.ltr,
                                         style: TextStyle(
-                                          color: selected ? Colors.white70 : textTertiary,
+                                          color: selected ? onAccent.withValues(alpha: 0.75) : textTertiary,
                                           fontSize: 10, fontWeight: FontWeight.w700,
                                         ),
                                       ),
@@ -9524,7 +9537,7 @@ class _SlotCard extends StatelessWidget {
     if (status == 'available' && selected) {
       bgClr = accentGreen;
       brdClr = accentGreen;
-      txtClr = Colors.white;
+      txtClr = onAccent;
       badge = isHebrew ? 'נבחר ✓' : 'SELECTED ✓';
     } else if (status == 'available') {
       bgClr = accentGreen.withValues(alpha: 0.08);
