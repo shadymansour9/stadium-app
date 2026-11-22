@@ -10634,7 +10634,11 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             const SizedBox(height: 6),
             Row(children: [Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'', textDirection: TextDirection.ltr,style:TextStyle(color:textSecondary,fontSize:12))]),
             const SizedBox(height: 4),
-            Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
+            // "₪200 · שעתיים" rather than the stored "₪200/2h".
+            Text(b['durationMinutes'] is int
+                    ? '₪${bookingAmount(b)} · ${slotLengthLabel(b['durationMinutes'] as int)}'
+                    : (b['price'] ?? '').toString(),
+              style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
             if (!isPast && bookingStart(b) != null) ...[
               const SizedBox(height: 6),
               GameCountdown(start: bookingStart(b)!, durationMinutes: (b['durationMinutes'] as int?) ?? 60),
