@@ -920,6 +920,204 @@ void showAppError(BuildContext context, Object error) {
 }
 
 // ==================== AUTH HELPERS ====================
+/// The privacy policy page (web/privacy.html), on whichever site is open.
+String privacyUrl() => '${kIsWeb ? Uri.base.origin : 'https://stadium-d5b5f.web.app'}/privacy.html';
+
+Widget privacyLink(BuildContext context) => Semantics(
+  identifier: 'privacy_link',
+  button: true,
+  container: true,
+  child: TextButton(
+    onPressed: () => openExternalLink(context, Uri.parse(privacyUrl())),
+    child: Text(tr('מדיניות פרטיות', 'Privacy policy'),
+      style: TextStyle(color: textSecondary, fontSize: 12, decoration: TextDecoration.underline)),
+  ),
+);
+
+class _DeleteCancelled implements Exception {}
+
+/// Firebase deletes an account only right after a sign-in, so the person
+/// signs in once more (Google, or their password) before anything is erased.
+Future<void> _reauthenticateForDelete(BuildContext context, User user) async {
+  final providers = user.providerData.map((p) => p.providerId).toSet();
+  if (providers.contains('google.com')) {
+    if (kIsWeb) {
+      await user.reauthenticateWithPopup(GoogleAuthProvider()..setCustomParameters({'prompt': 'select_account'}));
+    } else {
+      final gs = GoogleSignIn.instance;
+      if (!_googleSignInReady) {
+        await gs.initialize(serverClientId: _googleWebClientId);
+        _googleSignInReady = true;
+      }
+      final GoogleSignInAccount account;
+      try {
+        account = await gs.authenticate();
+      } on GoogleSignInException catch (e) {
+        if (e.code == GoogleSignInExceptionCode.canceled) throw _DeleteCancelled();
+        rethrow;
+      }
+      await user.reauthenticateWithCredential(GoogleAuthProvider.credential(idToken: account.authentication.idToken));
+    }
+    return;
+  }
+  final email = user.email;
+  if (email == null) throw _DeleteCancelled();
+  final passCtrl = TextEditingController();
+  final pass = await showDialog<String>(context: context, builder: (ctx) => AlertDialog(
+    backgroundColor: cardColor,
+    title: Text(tr('הכנס את הסיסמה שלך', 'Enter your password'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+    content: Semantics(identifier: 'delete_password', container: true, child: TextField(
+      controller: passCtrl,
+      obscureText: true,
+      autofocus: true,
+      style: TextStyle(color: textPrimary),
+      decoration: InputDecoration(hintText: tr('סיסמה', 'Password'), hintStyle: TextStyle(color: textTertiary)),
+    )),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+      TextButton(onPressed: () => Navigator.pop(ctx, passCtrl.text),
+        child: Text(tr('המשך', 'Continue'), style: TextStyle(color: colorError, fontWeight: FontWeight.w900))),
+    ],
+  ));
+  passCtrl.dispose();
+  if (pass == null || pass.isEmpty) throw _DeleteCancelled();
+  await user.reauthenticateWithCredential(EmailAuthProvider.credential(email: email, password: pass));
+}
+
+/// Erases what belongs to the person, then the account itself:
+/// future bookings they made, their place in games they joined, fixed-time
+/// requests, school sign-ups (and the spots they held), notifications and the
+/// profile. Past bookings stay for the court's records, without name or phone.
+Future<void> _eraseMyData(User user) async {
+  final db = FirebaseFirestore.instance;
+  final uid = user.uid;
+  final myName = user.displayName ?? user.email ?? '';
+  final now = DateTime.now();
+  final bookings = db.collection('bookings');
+
+  for (final d in (await bookings.where('userId', isEqualTo: uid).get()).docs) {
+    final start = bookingStart(d.data());
+    if (start == null || start.isAfter(now)) {
+      await d.reference.delete();
+    } else {
+      await d.reference.update({'userName': tr('משתמש שנמחק', 'Deleted user'), 'phone': ''});
+    }
+  }
+  final joined = <String, DocumentReference<Map<String, dynamic>>>{};
+  for (final d in (await bookings.where('playerIds', arrayContains: uid).get()).docs) {
+    if (d.data()['userId'] != uid) joined[d.id] = d.reference;
+  }
+  if (myName.isNotEmpty) {
+    for (final d in (await bookings.where('players', arrayContains: myName).get()).docs) {
+      if (d.data()['userId'] != uid) joined[d.id] = d.reference;
+    }
+  }
+  for (final ref in joined.values) {
+    await ref.update({
+      'players': FieldValue.arrayRemove([myName]),
+      'playerIds': FieldValue.arrayRemove([uid]),
+    });
+  }
+  for (final d in (await db.collection('fixed_requests').where('userId', isEqualTo: uid).get()).docs) {
+    await d.reference.delete();
+  }
+  for (final d in (await db.collection('training_registrations').where('parentUserId', isEqualTo: uid).get()).docs) {
+    final groupId = (d.data()['groupId'] as String?) ?? '';
+    final batch = db.batch()..delete(d.reference);
+    if (groupId.isNotEmpty) batch.delete(groupSeats(groupId).doc(d.id));
+    await batch.commit();
+  }
+  for (final d in (await db.collection('notifications').where('userId', isEqualTo: uid).get()).docs) {
+    await d.reference.delete();
+  }
+  await db.collection('users').doc(uid).delete();
+}
+
+/// "Delete my account" (required by the App Store and Google Play).
+Future<void> deleteMyAccount(BuildContext context) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null || user.isAnonymous) return;
+  final confirmCtrl = TextEditingController();
+  final word = tr('מחק', 'DELETE');
+  final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(
+    builder: (ctx, setD) => AlertDialog(
+      backgroundColor: cardColor,
+      title: Semantics(identifier: 'delete_account_dialog', container: true,
+        child: Text(tr('למחוק את החשבון?', 'Delete your account?'), style: TextStyle(color: colorError, fontWeight: FontWeight.w900))),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(tr('יימחקו: הפרטים שלך, ההזמנות העתידיות שלך, ההרשמות לבית הספר וההתראות. תוסר גם מהמשחקים שהצטרפת אליהם. אי אפשר לבטל את זה.',
+                'This erases your details, your upcoming bookings, school sign-ups and notifications, and removes you from games you joined. It cannot be undone.'),
+          style: TextStyle(color: textSecondary, height: 1.4)),
+        const SizedBox(height: spaceMd),
+        Text(tr('כדי לאשר, כתוב: $word', 'To confirm, type: $word'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 6),
+        Semantics(identifier: 'delete_account_confirm_field', container: true, child: TextField(
+          controller: confirmCtrl,
+          onChanged: (_) => setD(() {}),
+          style: TextStyle(color: textPrimary),
+          decoration: InputDecoration(hintText: word, hintStyle: TextStyle(color: textTertiary)),
+        )),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+        Semantics(identifier: 'delete_account_confirm', button: true, container: true, child: TextButton(
+          onPressed: confirmCtrl.text.trim().toUpperCase() == word.toUpperCase() ? () => Navigator.pop(ctx, true) : null,
+          child: Text(tr('מחק לצמיתות', 'Delete forever'), style: TextStyle(
+            color: confirmCtrl.text.trim().toUpperCase() == word.toUpperCase() ? colorError : textTertiary, fontWeight: FontWeight.w900)),
+        )),
+      ],
+    ),
+  ));
+  confirmCtrl.dispose();
+  if (ok != true || !context.mounted) return;
+
+  try {
+    await _reauthenticateForDelete(context, user);
+  } on _DeleteCancelled {
+    return;
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(tr('הכניסה לא אושרה, החשבון לא נמחק', "Sign-in wasn't confirmed; nothing was deleted")),
+        backgroundColor: colorError,
+      ));
+    }
+    return;
+  }
+  if (!context.mounted) return;
+
+  final nav = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  showDialog(context: context, barrierDismissible: false, builder: (_) => PopScope(
+    canPop: false,
+    child: Center(child: Card(color: cardColor, child: Padding(
+      padding: const EdgeInsets.all(spaceLg),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        CircularProgressIndicator(color: colorError),
+        const SizedBox(height: spaceMd),
+        Text(tr('מוחק את החשבון...', 'Deleting your account...'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+      ]),
+    ))),
+  ));
+  try {
+    await _eraseMyData(user);
+    await user.delete();
+  } catch (e) {
+    nav.pop();
+    debugPrint('Account delete failed: $e');
+    messenger.showSnackBar(SnackBar(
+      content: Text(tr('המחיקה לא הושלמה. נסה שוב או כתוב לנו', "Couldn't finish deleting. Try again or email us")),
+      backgroundColor: colorError,
+    ));
+    return;
+  }
+  nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
+  messenger.showSnackBar(SnackBar(
+    content: Text(tr('החשבון נמחק', 'Your account was deleted')),
+    backgroundColor: accentGreen,
+  ));
+}
+
 Future<void> _signOut([BuildContext? context]) async {
   await FirebaseAuth.instance.signOut();
   // After login uses pushReplacement to admin/venue screens, the auth-gate
@@ -2955,6 +3153,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                     ),
+                    Center(child: privacyLink(context)),
 
                     const SizedBox(height: spaceLg),
 
@@ -3395,6 +3594,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             icon: _loading ? null : Icons.person_add_alt_1,
                             onPressed: _loading ? null : _register,
                           ),
+                          const SizedBox(height: spaceXs),
+                          Text(tr('ביצירת חשבון אתה מסכים למדיניות הפרטיות', 'By creating an account you agree to the privacy policy'),
+                            textAlign: TextAlign.center, style: TextStyle(color: textTertiary, fontSize: 11)),
+                          Center(child: privacyLink(context)),
                         ],
                       ),
                     ),
@@ -9358,6 +9561,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     () => navigateTo(context, const ContactScreen())),
                 const SizedBox(height: 10),
                 _menuItem(Icons.logout, tr('יציאה', 'Sign Out'), Colors.red, () => _signOut(context)),
+                const SizedBox(height: spaceLg),
+                Center(child: privacyLink(context)),
+                Center(child: Semantics(
+                  identifier: 'profile_delete_account',
+                  button: true,
+                  container: true,
+                  child: TextButton.icon(
+                    onPressed: () => deleteMyAccount(context),
+                    icon: Icon(Icons.delete_forever_outlined, size: 18, color: colorError.withValues(alpha: 0.8)),
+                    label: Text(tr('מחק את החשבון שלי', 'Delete my account'),
+                      style: TextStyle(color: colorError.withValues(alpha: 0.8), fontSize: 13, fontWeight: FontWeight.w700)),
+                  ),
+                )),
               ],
             ),
           );
