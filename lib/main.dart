@@ -934,10 +934,11 @@ Widget privacyLink(BuildContext context) => Semantics(
   ),
 );
 
-/// A dialog's text field stays on screen while the dialog fades out, so its
+/// A dialog's text field stays on screen while the dialog fades out and the
+/// keyboard closes (which redraws it), so its
 /// controller is disposed only after that ("_dependents.isEmpty" otherwise).
 void disposeAfterDialog(TextEditingController c) =>
-    Future.delayed(const Duration(milliseconds: 800), c.dispose);
+    Future.delayed(const Duration(seconds: 2), c.dispose);
 
 class _DeleteCancelled implements Exception {}
 
