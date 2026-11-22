@@ -7618,7 +7618,8 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                           appSectionTitle(tr('בחר ספורט', 'CHOOSE YOUR SPORT')),
                           const SizedBox(height: spaceXs),
                           _SportCards(
-                            sports: [kSportFootball, kSportPadel, kSportTennis].where(allSports.contains).toList(),
+                            sports: const [kSportFootball, kSportPadel, kSportTennis],
+                            available: allSports,
                             selected: showSportFilter ? _sportFilter : null,
                             onSelected: (s) => setState(() => _sportFilter = _sportFilter == s ? null : s),
                           ),
@@ -8177,59 +8178,79 @@ class _SchoolSignupCard extends StatelessWidget {
   }
 }
 
-/// "Choose your sport": big cover cards with the sport's name; a tap filters.
+/// "Choose your sport": the three sports side by side, sized to the space
+/// they get; a sport without courts yet is dimmed as "soon". A tap filters.
 class _SportCards extends StatelessWidget {
   final List<String> sports;
+  final Set<String> available;
   final String? selected;
   final ValueChanged<String> onSelected;
-  const _SportCards({required this.sports, required this.selected, required this.onSelected});
+  const _SportCards({required this.sports, required this.available, required this.selected, required this.onSelected});
 
   @override
   Widget build(BuildContext context) {
-    final w = MediaQuery.of(context).size.width;
-    final cardW = sports.length == 1 ? w - spaceMd * 2 : (w * 0.68).clamp(220.0, 340.0);
-    return SizedBox(
-      height: 150,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: sports.length,
-        separatorBuilder: (_, __) => const SizedBox(width: spaceSm),
-        itemBuilder: (_, i) {
-          final sp = sports[i];
-          final sel = selected == sp;
-          return Semantics(
-            identifier: 'sport_card_$sp',
-            button: true,
-            selected: sel,
-            container: true,
-            child: GestureDetector(
-              onTap: () => onSelected(sp),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: cardW.toDouble(),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(26),
-                  border: Border.all(color: sel ? accentGreen : Colors.transparent, width: 2),
-                  gradient: LinearGradient(
-                    begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
-                    colors: coverGradient,
-                  ),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Stack(children: [
-                  PositionedDirectional(end: -18, bottom: -24,
-                    child: Icon(sportIcon(sp), size: 150, color: Colors.white.withValues(alpha: 0.08))),
-                  Center(child: Text(sportLabel(sp).toUpperCase(),
-                    style: const TextStyle(color: Colors.white, fontSize: 46, fontWeight: FontWeight.w900,
-                      fontFamily: kNumberFont, fontFamilyFallback: kNumberFontFallback, fontVariations: kNumberWeight, height: 1,
-                      shadows: [Shadow(blurRadius: 10, color: Colors.black45)]))),
-                  if (sel)
-                    PositionedDirectional(top: 10, start: 12, child: Icon(Icons.check_circle, color: accentGreen, size: 22)),
-                ]),
+    return LayoutBuilder(builder: (context, box) {
+      final wide = box.maxWidth > 700;
+      return SizedBox(
+        height: wide ? 150 : 112,
+        child: Row(children: [
+          for (var i = 0; i < sports.length; i++) ...[
+            if (i > 0) const SizedBox(width: spaceSm),
+            Expanded(child: _card(sports[i], wide)),
+          ],
+        ]),
+      );
+    });
+  }
+
+  Widget _card(String sp, bool wide) {
+    final sel = selected == sp;
+    final open = available.contains(sp);
+    return Semantics(
+      identifier: 'sport_card_$sp',
+      button: open,
+      selected: sel,
+      container: true,
+      child: GestureDetector(
+        onTap: open ? () => onSelected(sp) : null,
+        child: Opacity(
+          opacity: open ? 1 : 0.45,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(wide ? 26 : 20),
+              border: Border.all(color: sel ? accentGreen : Colors.transparent, width: 2),
+              gradient: LinearGradient(
+                begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
+                colors: coverGradient,
               ),
             ),
-          );
-        },
+            clipBehavior: Clip.antiAlias,
+            child: Stack(children: [
+              PositionedDirectional(end: -14, bottom: -18,
+                child: Icon(sportIcon(sp), size: wide ? 140 : 90, color: Colors.white.withValues(alpha: 0.08))),
+              Center(child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  FittedBox(fit: BoxFit.scaleDown, child: Text(sportLabel(sp).toUpperCase(),
+                    style: TextStyle(color: Colors.white, fontSize: wide ? 44 : 26, fontWeight: FontWeight.w900,
+                      fontFamily: kNumberFont, fontFamilyFallback: kNumberFontFallback, fontVariations: kNumberWeight, height: 1,
+                      shadows: const [Shadow(blurRadius: 10, color: Colors.black45)]))),
+                  if (!open) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(10)),
+                      child: Text(tr('בקרוב', 'Soon'), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ]),
+              )),
+              if (sel)
+                PositionedDirectional(top: 8, start: 10, child: Icon(Icons.check_circle, color: accentGreen, size: 20)),
+            ]),
+          ),
+        ),
       ),
     );
   }
