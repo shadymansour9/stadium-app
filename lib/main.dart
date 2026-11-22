@@ -7978,6 +7978,75 @@ class SchoolsScreen extends StatelessWidget {
 }
 
 /// Home reminder: the player's next game, today or tomorrow.
+/// "Starts in 2:14:05", ticking every second; days when it's further off,
+/// "Playing now" during the game.
+class GameCountdown extends StatefulWidget {
+  final DateTime start;
+  final int durationMinutes;
+  final bool big;
+  const GameCountdown({super.key, required this.start, this.durationMinutes = 60, this.big = false});
+  @override State<GameCountdown> createState() => _GameCountdownState();
+}
+
+class _GameCountdownState extends State<GameCountdown> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) { if (mounted) setState(() {}); });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final left = widget.start.difference(now);
+    final end = widget.start.add(Duration(minutes: widget.durationMinutes));
+    String two(int n) => n.toString().padLeft(2, '0');
+    final String text;
+    final Color color;
+    if (left.isNegative) {
+      if (now.isBefore(end)) {
+        text = tr('המשחק התחיל ⚽', 'Playing now ⚽');
+        color = accentGreen;
+      } else {
+        return const SizedBox.shrink();
+      }
+    } else if (left.inHours >= 24) {
+      // Calendar days: a game on Thursday seen on Monday is "in 3 days".
+      final days = DateTime(widget.start.year, widget.start.month, widget.start.day)
+          .difference(DateTime(now.year, now.month, now.day)).inDays;
+      text = days == 1 ? tr('בעוד יום', 'In 1 day') : tr('בעוד $days ימים', 'In $days days');
+      color = textSecondary;
+    } else {
+      // A left-to-right mark keeps "2:14:05" in order inside Hebrew text.
+      final clock = '‎${left.inHours}:${two(left.inMinutes % 60)}:${two(left.inSeconds % 60)}';
+      text = tr('מתחיל בעוד $clock', 'Starts in $clock');
+      color = left.inMinutes < 60 ? colorWarning : accentGreen;
+    }
+    return Semantics(
+      identifier: 'game_countdown',
+      container: true,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: widget.big ? 12 : 8, vertical: widget.big ? 6 : 3),
+        decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.timer_outlined, size: widget.big ? 18 : 14, color: color),
+          const SizedBox(width: 4),
+          Text(text, style: TextStyle(color: color, fontSize: widget.big ? 16 : 12, fontWeight: FontWeight.w900,
+            fontFeatures: const [FontFeature.tabularFigures()])),
+        ]),
+      ),
+    );
+  }
+}
+
 class NextGameCard extends StatelessWidget {
   const NextGameCard({super.key});
 
@@ -8026,6 +8095,8 @@ class NextGameCard extends StatelessWidget {
                         style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.w900)),
                       const SizedBox(height: 2),
                       Text((next['stadiumName'] as String?) ?? '', style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      GameCountdown(start: nextStart, durationMinutes: (next['durationMinutes'] as int?) ?? 60, big: true),
                     ])),
                     Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: accentGreen),
                   ]),
@@ -10531,6 +10602,10 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             Row(children: [Icon(Icons.calendar_today_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text('${b['day']} ${b['date']}',style:TextStyle(color:textSecondary,fontSize:12)),const SizedBox(width:12),Icon(Icons.access_time_outlined,color:textSecondary,size:13),const SizedBox(width:4),Text(b['time']??'', textDirection: TextDirection.ltr,style:TextStyle(color:textSecondary,fontSize:12))]),
             const SizedBox(height: 4),
             Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
+            if (!isPast && bookingStart(b) != null) ...[
+              const SizedBox(height: 6),
+              GameCountdown(start: bookingStart(b)!, durationMinutes: (b['durationMinutes'] as int?) ?? 60),
+            ],
             if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 15}', style: TextStyle(color: textSecondary, fontSize: 12))],
             if (isOrg && b['payMethod'] != null) ...[
               const SizedBox(height: 8),
