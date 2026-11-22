@@ -562,7 +562,7 @@ class BookingSharePanel extends StatelessWidget {
             label: Text(tr('שלח לחברים בוואטסאפ', 'Send to friends on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF25D366),
-              foregroundColor: Colors.white,
+              foregroundColor: Colors.white, iconColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
             ),
@@ -1198,7 +1198,7 @@ Future<bool> requireAccount(BuildContext context) async {
             container: true,
             child: ElevatedButton(
               onPressed: () { Navigator.pop(ctx); navigateTo(context, const LoginScreen()); },
-              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, elevation: 0),
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, elevation: 0),
               child: Text(tr('כניסה', 'Sign in'), style: const TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
@@ -1443,7 +1443,7 @@ Widget appPrimaryButton({
       ),
       style: ElevatedButton.styleFrom(
         backgroundColor: accentGreen,
-        foregroundColor: bgColor,
+        foregroundColor: bgColor, iconColor: bgColor,
         disabledBackgroundColor: borderColor,
         disabledForegroundColor: textTertiary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusLg)),
@@ -2782,7 +2782,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -3245,7 +3245,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -4004,7 +4004,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -4098,7 +4098,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             onPressed: () => exportToCSV(context, allBookings, '${widget.stadiumId}_${upcoming ? 'upcoming' : 'history'}'),
             icon: const Icon(Icons.download_outlined, size: 16),
             label: Text(upcoming ? tr('ייצוא עתידיות','Export Upcoming') : tr('ייצוא היסטוריה','Export History')),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, iconColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
           )),
           const SizedBox(height: 12),
           ...docs.map((d) => _adminBookCard(d.data(), docId: d.id, context: context)),
@@ -4280,7 +4280,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   label: Text(tr('ייצוא', 'Export'), style: const TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: customDocs.isEmpty ? borderColor : colorWarning,
-                    foregroundColor: Colors.white,
+                    foregroundColor: Colors.white, iconColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   ),
@@ -6480,7 +6480,7 @@ class SchoolAdminView extends StatelessWidget {
               label: Text(tr('שלח בוואטסאפ', 'Send on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF25D366),
-                foregroundColor: Colors.white,
+                foregroundColor: Colors.white, iconColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
               ),
@@ -8086,7 +8086,7 @@ class _SchoolSignupCard extends StatelessWidget {
                 onPressed: open,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: colorInfo,
-                  foregroundColor: Colors.white,
+                  foregroundColor: Colors.white, iconColor: Colors.white,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
@@ -8215,7 +8215,7 @@ class _VenueCard extends StatelessWidget {
                     onPressed: onTap,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: accentGreen,
-                      foregroundColor: Colors.white,
+                      foregroundColor: Colors.white, iconColor: Colors.white,
                       elevation: 0,
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
@@ -8293,7 +8293,7 @@ class StadiumCard extends StatelessWidget {
             Row(children: [Icon(Icons.location_on_outlined, color: textSecondary, size: 14), const SizedBox(width: 2), Text(stadium['location'], style: TextStyle(color: textSecondary, fontSize: 13))]),
           ])),
           ElevatedButton(onPressed: () => navigateTo(context, BookingScreen(stadium: stadium)),
-            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             child: Text(tr('הזמן','BOOK'), style: const TextStyle(fontWeight: FontWeight.w900))),
         ])),
       ])),
@@ -8424,7 +8424,7 @@ class _BookingScreenState extends State<BookingScreen> {
       ),
       child: SafeArea(top: false, child: Padding(
         padding: const EdgeInsets.fromLTRB(spaceMd, spaceSm, spaceMd, spaceSm),
-        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Row(children: [
+        child: Center(heightFactor: 1, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(tr('מחיר', 'Price'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
             Text('₪$price', style: TextStyle(color: textPrimary, fontSize: 26, fontWeight: FontWeight.w900, height: 1.1)),
@@ -8436,7 +8436,7 @@ class _BookingScreenState extends State<BookingScreen> {
             icon: const Icon(Icons.check_circle_outline, size: 20),
             label: Text(tr('הזמן עכשיו', 'Book now'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: accentGreen, foregroundColor: Colors.white, elevation: 0,
+              backgroundColor: accentGreen, foregroundColor: Colors.white, iconColor: Colors.white, elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 26),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
             ),
@@ -8846,7 +8846,7 @@ class _BookingScreenState extends State<BookingScreen> {
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: accentGreen,
-                        foregroundColor: bgColor,
+                        foregroundColor: bgColor, iconColor: bgColor,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                         elevation: 0,
@@ -9030,7 +9030,7 @@ class _BookingScreenState extends State<BookingScreen> {
               onPressed: () => openPaybox(dialogContext, widget.stadium),
               icon: const Icon(Icons.phone_iphone, size: 20),
               label: Text(tr('שלם ₪$typePrice ב-PayBox', 'Pay ₪$typePrice with PayBox'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white, iconColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             ),
           )),
@@ -9058,7 +9058,7 @@ class _BookingScreenState extends State<BookingScreen> {
         BookingSharePanel(bookingId: slotKey, code: code, summary: '${widget.stadium['name']} • ${_days[_selDay]['name']} $date • $label'
             '${courtHasLocation(widget.stadium) ? '\n📍 ${courtAddress(widget.stadium).isNotEmpty ? '${courtAddress(widget.stadium)} ' : ''}${wazeUri(widget.stadium)}' : ''}'),
       ]),
-      actions: [ElevatedButton(onPressed: () => Navigator.pop(dialogContext), style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: Text(tr('הבנתי','GOT IT'), style: const TextStyle(fontWeight: FontWeight.w900)))],
+      actions: [ElevatedButton(onPressed: () => Navigator.pop(dialogContext), style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: Text(tr('הבנתי','GOT IT'), style: const TextStyle(fontWeight: FontWeight.w900)))],
     ));
   }
 
@@ -9147,7 +9147,7 @@ class _BookingScreenState extends State<BookingScreen> {
             container: true,
             child: ElevatedButton(
               onPressed: time == null ? null : () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, elevation: 0),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, iconColor: Colors.white, elevation: 0),
               child: Text(tr('שלח בקשה', 'Send request'), style: const TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
@@ -9274,6 +9274,7 @@ class _BookingScreenState extends State<BookingScreen> {
                                       ),
                                       Text(
                                         '/${(d['date'] as String).split('/').last}',
+                                        textDirection: TextDirection.ltr,
                                         style: TextStyle(
                                           color: selected ? Colors.white70 : textTertiary,
                                           fontSize: 10, fontWeight: FontWeight.w700,
@@ -9838,7 +9839,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
       if (_booking==null&&_success.isEmpty) ...[
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_find,
-          style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
           child: _loading?SizedBox(width:20,height:20,child:CircularProgressIndicator(color:bgColor,strokeWidth:2)):Text(tr('חפש הזמנה','FIND BOOKING'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
       ],
       if (_booking!=null) ...[
@@ -9855,7 +9856,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
         const SizedBox(height: 14),
         if (_success.isEmpty) ...[
           if (!_joined) SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_join,
-            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             child: Text(tr('הצטרף לקבוצה','JOIN TEAM'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
           if (_joined) ...[
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
@@ -10557,7 +10558,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
                         ? tr('שלם את היתרה ₪${bookingMissingAmount(b)} ב-PayBox', 'Pay the ₪${bookingMissingAmount(b)} left with PayBox')
                         : tr('שלם ₪${bookingAmount(b)} ב-PayBox', 'Pay ₪${bookingAmount(b)} with PayBox'),
                       style: const TextStyle(fontWeight: FontWeight.w900)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white, iconColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                   ),
                 ))
@@ -10754,7 +10755,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
               onPressed: _loading ? null : _loadDefaults,
               icon: _loading ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2)) : const Icon(Icons.download_outlined, size: 18),
               label: Text(tr('טען ברירות מחדל', 'Load Defaults')),
-              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
             ),
           ]));
         }
@@ -11455,7 +11456,7 @@ class _StadiumImageScreenState extends State<StadiumImageScreen> {
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
                 label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
               const SizedBox(height: 10),
@@ -11688,7 +11689,7 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
                 label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
               const SizedBox(height: 10),
@@ -12085,7 +12086,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                     onPressed: () => _register(context),
                     icon: const Icon(Icons.how_to_reg),
                     label: Text(tr('הירשם לקבוצה', 'REGISTER'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, iconColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   )),
               const SizedBox(height: 24),
             ]);
@@ -12663,7 +12664,7 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
                         onPressed: () => Navigator.pop(context, true),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+                          foregroundColor: Colors.white, iconColor: Colors.white,
                         ),
                         child: Text(tr('יציאה', 'Sign Out'), style: const TextStyle(fontWeight: FontWeight.w900)),
                       ),
@@ -12801,7 +12802,7 @@ class _AdminAppBarState extends State<AdminAppBar> {
                         onPressed: () => Navigator.pop(context, true),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+                          foregroundColor: Colors.white, iconColor: Colors.white,
                         ),
                         child: Text(tr('יציאה', 'Sign Out'), style: const TextStyle(fontWeight: FontWeight.w900)),
                       ),
