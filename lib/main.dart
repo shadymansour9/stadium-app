@@ -1979,7 +1979,19 @@ Widget appLoading({String? message}) {
 Future<void> exportToCSV(BuildContext context, List<Map<String,dynamic>> bookings, String filename) async {
   final bytes = buildBookingsReport(bookings, hebrew: isHebrew);
   if (bytes == null) return;
-  final path = await saveExcelFile(bytes, '$filename.xlsx');
+  // "WyO80…_monthly_11-2026" -> "shadystadium_חודשי_11-2026": court names, not ids.
+  var name = filename;
+  for (final c in [...allStadiums, ...hiddenCourts]) {
+    final id = c['id'] as String;
+    if (name.contains(id)) name = name.replaceAll(id, c['name'] as String);
+  }
+  if (isHebrew) {
+    const words = {'daily': 'יומי', 'weekly': 'שבועי', 'monthly': 'חודשי', 'custom': 'טווח',
+      'upcoming': 'עתידיות', 'history': 'היסטוריה', 'report': 'דוח', 'all_bookings': 'כל_ההזמנות'};
+    words.forEach((en, he) => name = name.replaceAll(en, he));
+  }
+  name = name.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
+  final path = await saveExcelFile(bytes, '$name.xlsx');
   if (!context.mounted) return;
   final total = bookings.fold<int>(0, (s, b) => s + reportAmount(b));
   final owed = bookings.fold<int>(0, (s, b) => s + bookingMissingAmount(b));
