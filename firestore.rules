@@ -66,7 +66,8 @@ service cloud.firestore {
       allow read:   if isSignedIn();
       allow create: if isMember() && withinMaxPlayers()
         && (isAdmin() || managesStadium(request.resource.data.get('stadiumId', ''))
-            || request.resource.data.get('paymentStatus', 'unpaid') == 'unpaid');
+            || (request.resource.data.get('paymentStatus', 'unpaid') == 'unpaid'
+                && !('paidAmount' in request.resource.data)));
       allow update: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
@@ -75,7 +76,7 @@ service cloud.firestore {
       ) && (isAdmin() || (withinMaxPlayers() && maxPlayersUnchanged()))
         // Paid / not paid is the court admin's call, not the player's.
         && (isAdmin() || managesStadium(resource.data.get('stadiumId', ''))
-            || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['paymentStatus', 'paidAt']));
+            || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['paymentStatus', 'paidAt', 'paidAmount', 'paidBy']));
       allow delete: if isMember() && (
         resource.data.userId == request.auth.uid
         || isAdmin()
