@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show base64Decode, base64Encode;
+import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
@@ -11,6 +12,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:image/image.dart' as img;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -560,7 +562,7 @@ class BookingSharePanel extends StatelessWidget {
             label: Text(tr('שלח לחברים בוואטסאפ', 'Send to friends on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF25D366),
-              foregroundColor: Colors.white,
+              foregroundColor: Colors.white, iconColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
             ),
@@ -1196,7 +1198,7 @@ Future<bool> requireAccount(BuildContext context) async {
             container: true,
             child: ElevatedButton(
               onPressed: () { Navigator.pop(ctx); navigateTo(context, const LoginScreen()); },
-              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, elevation: 0),
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, elevation: 0),
               child: Text(tr('כניסה', 'Sign in'), style: const TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
@@ -1441,7 +1443,7 @@ Widget appPrimaryButton({
       ),
       style: ElevatedButton.styleFrom(
         backgroundColor: accentGreen,
-        foregroundColor: bgColor,
+        foregroundColor: bgColor, iconColor: bgColor,
         disabledBackgroundColor: borderColor,
         disabledForegroundColor: textTertiary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusLg)),
@@ -2780,7 +2782,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -3243,7 +3245,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -4002,7 +4004,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accentGreen,
-                          foregroundColor: bgColor,
+                          foregroundColor: bgColor, iconColor: bgColor,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                           elevation: 0,
@@ -4096,7 +4098,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             onPressed: () => exportToCSV(context, allBookings, '${widget.stadiumId}_${upcoming ? 'upcoming' : 'history'}'),
             icon: const Icon(Icons.download_outlined, size: 16),
             label: Text(upcoming ? tr('ייצוא עתידיות','Export Upcoming') : tr('ייצוא היסטוריה','Export History')),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, iconColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
           )),
           const SizedBox(height: 12),
           ...docs.map((d) => _adminBookCard(d.data(), docId: d.id, context: context)),
@@ -4278,7 +4280,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   label: Text(tr('ייצוא', 'Export'), style: const TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: customDocs.isEmpty ? borderColor : colorWarning,
-                    foregroundColor: Colors.white,
+                    foregroundColor: Colors.white, iconColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   ),
@@ -4989,6 +4991,287 @@ class _CourtSetupBar extends StatelessWidget {
   }
 }
 
+// ==================== COURT PHOTOS, LOCATION, AMENITIES ====================
+
+/// What a court can have; the court admin ticks them in court settings.
+const Map<String, (String, String, IconData)> kAmenities = {
+  'parking':   ('חניה חינם', 'Free parking', Icons.local_parking_rounded),
+  'lockers':   ('חדרי הלבשה', 'Changing rooms', Icons.checkroom_rounded),
+  'showers':   ('מקלחות', 'Showers', Icons.shower_rounded),
+  'lights':    ('תאורת לילה', 'Floodlights', Icons.light_mode_rounded),
+  'turf':      ('דשא סינטטי', 'Artificial turf', Icons.grass_rounded),
+  'indoor':    ('מקורה', 'Indoor', Icons.roofing_rounded),
+  'equipment': ('ציוד להשאלה', 'Gear to borrow', Icons.sports_soccer_rounded),
+  'kiosk':     ('שתייה וקיוסק', 'Drinks & kiosk', Icons.local_cafe_rounded),
+};
+
+List<String> courtAmenities(Map<String, dynamic>? c) =>
+    ((c?['amenities'] as List?) ?? const []).cast<String>().where(kAmenities.containsKey).toList();
+
+String courtAddress(Map<String, dynamic>? c) => ((c?['address'] as String?) ?? '').trim();
+String courtMapsLink(Map<String, dynamic>? c) => ((c?['mapsLink'] as String?) ?? '').trim();
+bool courtHasLocation(Map<String, dynamic>? c) => courtAddress(c).isNotEmpty || courtMapsLink(c).isNotEmpty;
+
+Uri _fullUrl(String link) => Uri.parse(link.startsWith('http') ? link : 'https://$link');
+
+/// Waze: the admin's Waze link if they pasted one, else a search for the address.
+Uri wazeUri(Map<String, dynamic> c) {
+  final link = courtMapsLink(c);
+  if (link.contains('waze')) return _fullUrl(link);
+  final q = courtAddress(c).isNotEmpty ? courtAddress(c) : (c['name'] as String? ?? '');
+  return Uri.parse('https://waze.com/ul?q=${Uri.encodeComponent(q)}&navigate=yes');
+}
+
+/// Google Maps: the admin's Maps link if they pasted one, else a search.
+Uri googleMapsUri(Map<String, dynamic> c) {
+  final link = courtMapsLink(c);
+  if (link.isNotEmpty && !link.contains('waze')) return _fullUrl(link);
+  final q = courtAddress(c).isNotEmpty ? courtAddress(c) : (c['name'] as String? ?? '');
+  return Uri.parse('https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(q)}');
+}
+
+/// "Navigate with Waze / Google Maps", shown when the court has a location.
+Widget navigateButtons(BuildContext context, Map<String, dynamic> court) {
+  if (!courtHasLocation(court)) return const SizedBox.shrink();
+  Widget btn(String id, String label, Color color, Uri uri) => Expanded(child: Semantics(
+    identifier: id,
+    button: true,
+    container: true,
+    child: OutlinedButton.icon(
+      onPressed: () => openExternalLink(context, uri),
+      icon: Icon(Icons.navigation_rounded, size: 18, color: color),
+      label: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+      style: OutlinedButton.styleFrom(
+        side: BorderSide(color: color.withValues(alpha: 0.5)),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+      ),
+    ),
+  ));
+  return Row(children: [
+    btn('navigate_waze', tr('נווט ב-Waze', 'Waze'), const Color(0xFF1F9BD7), wazeUri(court)),
+    const SizedBox(width: spaceSm),
+    btn('navigate_maps', tr('Google Maps', 'Google Maps'), const Color(0xFF34A853), googleMapsUri(court)),
+  ]);
+}
+
+/// Amenity chips ("Free parking", "Showers", ...).
+Widget amenityChips(List<String> keys) => Wrap(spacing: 6, runSpacing: 6, children: [
+  for (final k in keys)
+    Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: accentGreen.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accentGreen.withValues(alpha: 0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(kAmenities[k]!.$3, size: 14, color: accentGreen),
+        const SizedBox(width: 4),
+        Text(tr(kAmenities[k]!.$1, kAmenities[k]!.$2),
+          style: TextStyle(color: textPrimary, fontSize: 12, fontWeight: FontWeight.w700)),
+      ]),
+    ),
+]);
+
+// ---- photos ----
+// Firebase Storage needs the paid plan, so photos are shrunk on the phone and
+// kept in Firestore: court_photos/{courtId} {photos, thumbs} (base64 JPEG),
+// and the first thumbnail also on the court as `thumb` for the Home cards.
+const int kMaxCourtPhotos = 4;
+
+final Map<String, Uint8List> _b64Cache = {};
+
+/// Bytes of a base64 image, decoded once.
+Uint8List? photoBytes(String? b64) {
+  if (b64 == null || b64.isEmpty) return null;
+  final key = '${b64.length}:${b64.hashCode}';
+  return _b64Cache[key] ??= (() {
+    try { return base64Decode(b64); } catch (_) { return Uint8List(0); }
+  })();
+}
+
+/// The first photo thumbnail of any court of a venue, for its Home card.
+String? venueThumb(Map<String, dynamic> venue) {
+  final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
+  for (final s in allStadiums) {
+    if (ids.contains(s['id']) && (s['thumb'] as String? ?? '').isNotEmpty) return s['thumb'] as String;
+  }
+  return null;
+}
+
+/// Picks a photo and returns (photo, thumbnail) as base64 JPEG, small enough
+/// that four photos fit in one Firestore document.
+Future<(String, String)?> pickCourtPhoto() async {
+  final picked = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 85);
+  if (picked == null) return null;
+  final raw = await picked.readAsBytes();
+  final decoded = img.decodeImage(raw);
+  if (decoded == null) throw Exception(tr('לא הצלחנו לקרוא את התמונה', "Couldn't read that image"));
+  List<int> shrink(int maxWidth, int quality) {
+    final resized = decoded.width > maxWidth ? img.copyResize(decoded, width: maxWidth) : decoded;
+    return img.encodeJpg(resized, quality: quality);
+  }
+  var full = shrink(1024, 72);
+  if (full.length > 120 * 1024) full = shrink(900, 60);
+  if (full.length > 120 * 1024) full = shrink(760, 50);
+  final thumb = shrink(480, 60);
+  return (base64Encode(full), base64Encode(thumb));
+}
+
+/// Court settings: add / remove photos (saved right away).
+class CourtPhotosEditor extends StatefulWidget {
+  final String courtId;
+  const CourtPhotosEditor({super.key, required this.courtId});
+  @override State<CourtPhotosEditor> createState() => _CourtPhotosEditorState();
+}
+
+class _CourtPhotosEditorState extends State<CourtPhotosEditor> {
+  List<String> _photos = [];
+  List<String> _thumbs = [];
+  bool _loading = true;
+  bool _busy = false;
+
+  DocumentReference<Map<String, dynamic>> get _doc =>
+      FirebaseFirestore.instance.collection('court_photos').doc(widget.courtId);
+
+  @override
+  void initState() {
+    super.initState();
+    _doc.get().then((d) {
+      if (!mounted) return;
+      setState(() {
+        _photos = ((d.data()?['photos'] as List?) ?? const []).cast<String>();
+        _thumbs = ((d.data()?['thumbs'] as List?) ?? const []).cast<String>();
+        _loading = false;
+      });
+    }).catchError((_) { if (mounted) setState(() => _loading = false); });
+  }
+
+  Future<void> _save(List<String> photos, List<String> thumbs) async {
+    final batch = FirebaseFirestore.instance.batch()
+      ..set(_doc, {'photos': photos, 'thumbs': thumbs, 'updatedAt': DateTime.now().toIso8601String()})
+      ..update(FirebaseFirestore.instance.collection('stadiums').doc(widget.courtId),
+          {'thumb': thumbs.isEmpty ? FieldValue.delete() : thumbs.first});
+    await batch.commit().timeout(const Duration(seconds: 30));
+    final court = stadiumById(widget.courtId);
+    if (court != null) {
+      if (thumbs.isEmpty) { court.remove('thumb'); } else { court['thumb'] = thumbs.first; }
+    }
+    if (mounted) setState(() { _photos = photos; _thumbs = thumbs; });
+  }
+
+  Future<void> _add() async {
+    setState(() => _busy = true);
+    try {
+      final p = await pickCourtPhoto();
+      if (p != null) await _save([..._photos, p.$1], [..._thumbs, p.$2]);
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _remove(int i) async {
+    setState(() => _busy = true);
+    try {
+      await _save([..._photos]..removeAt(i), [..._thumbs]..removeAt(i));
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _makeFirst(int i) async {
+    if (i == 0) return;
+    setState(() => _busy = true);
+    try {
+      final p = [..._photos], t = [..._thumbs];
+      p.insert(0, p.removeAt(i));
+      t.insert(0, t.removeAt(i));
+      await _save(p, t);
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Padding(padding: EdgeInsets.all(spaceMd), child: Center(child: CircularProgressIndicator()));
+    final canAdd = _thumbs.length < kMaxCourtPhotos && !_busy;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      GridView.count(
+        crossAxisCount: 2,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: spaceSm,
+        crossAxisSpacing: spaceSm,
+        childAspectRatio: 4 / 3,
+        children: [
+          for (var i = 0; i < _thumbs.length; i++)
+            Semantics(identifier: 'court_photo_$i', container: true, child: ClipRRect(
+              borderRadius: BorderRadius.circular(radiusMd),
+              child: Stack(fit: StackFit.expand, children: [
+                Image.memory(photoBytes(_thumbs[i])!, fit: BoxFit.cover, gaplessPlayback: true),
+                if (i == 0)
+                  PositionedDirectional(top: 6, start: 6, child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(color: accentGreen, borderRadius: BorderRadius.circular(10)),
+                    child: Text(tr('תמונה ראשית', 'Cover'), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
+                  ))
+                else
+                  PositionedDirectional(top: 4, start: 4, child: Material(
+                    color: Colors.black54, shape: const StadiumBorder(),
+                    child: InkWell(
+                      customBorder: const StadiumBorder(),
+                      onTap: _busy ? null : () => _makeFirst(i),
+                      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        child: Text(tr('הפוך לראשית', 'Make cover'), style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700))),
+                    ),
+                  )),
+                PositionedDirectional(top: 4, end: 4, child: Material(
+                  color: Colors.black54, shape: const CircleBorder(),
+                  child: IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _busy ? null : () => _remove(i),
+                    icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                  ),
+                )),
+              ]),
+            )),
+          if (_thumbs.length < kMaxCourtPhotos)
+            Semantics(identifier: 'court_photo_add', button: true, container: true, child: InkWell(
+              borderRadius: BorderRadius.circular(radiusMd),
+              onTap: canAdd ? _add : null,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: accentGreen.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(radiusMd),
+                  border: Border.all(color: accentGreen.withValues(alpha: 0.5)),
+                ),
+                child: Center(child: _busy
+                    ? const CircularProgressIndicator()
+                    : Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.add_a_photo_outlined, color: accentGreen, size: 30),
+                        const SizedBox(height: 6),
+                        Text(tr('הוסף תמונה', 'Add photo'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+                      ])),
+              ),
+            )),
+        ],
+      ),
+      const SizedBox(height: 6),
+      Text(tr('עד $kMaxCourtPhotos תמונות. הראשונה מופיעה בכרטיס המגרש בדף הבית. התמונות נשמרות מיד.',
+              'Up to $kMaxCourtPhotos photos. The first shows on the Home card. Photos save right away.'),
+        style: TextStyle(color: textSecondary, fontSize: 12)),
+    ]);
+  }
+}
+
 /// Court admin sets the hourly price, opening hours and booking length.
 class CourtSettingsScreen extends StatefulWidget {
   final Map<String, dynamic> court;
@@ -5000,6 +5283,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _priceCtrl;
   late final TextEditingController _phoneCtrl;
+  late final TextEditingController _addressCtrl;
+  late final TextEditingController _mapsCtrl;
+  late Set<String> _amenities;
   late int _slotMinutes;
   late int _maxPlayers;
   late bool _payCash;
@@ -5021,6 +5307,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
     final p = (c['pricePerHour'] as num?)?.round();
     _priceCtrl = TextEditingController(text: p?.toString() ?? '');
     _phoneCtrl = TextEditingController(text: (c['contactPhone'] as String?) ?? '');
+    _addressCtrl = TextEditingController(text: courtAddress(c));
+    _mapsCtrl = TextEditingController(text: courtMapsLink(c));
+    _amenities = courtAmenities(c).toSet();
     final options = (sportDefaults[sportOf(c)]!['slotOptions'] as List).cast<int>();
     final m = (c['slotMinutes'] as int?) ?? (sportDefaults[sportOf(c)]!['defaultSlotMinutes'] as int);
     _slotMinutes = options.contains(m) ? m : options.first;
@@ -5032,6 +5321,8 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   void dispose() {
     _priceCtrl.dispose();
     _phoneCtrl.dispose();
+    _addressCtrl.dispose();
+    _mapsCtrl.dispose();
     _payboxCtrl.dispose();
     super.dispose();
   }
@@ -5084,6 +5375,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
         'slotMinutes': _slotMinutes,
         'maxPlayers': _maxPlayers,
         'contactPhone': _phoneCtrl.text.trim(),
+        'address': _addressCtrl.text.trim(),
+        'mapsLink': _mapsCtrl.text.trim(),
+        'amenities': kAmenities.keys.where(_amenities.contains).toList(),
         'payCash': _payCash,
         'payPaybox': _payPaybox,
         'payboxLink': _payboxCtrl.text.trim(),
@@ -5224,6 +5518,41 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
             Expanded(child: _timeDropdown(tr('סוגרים ב-', 'Closes at'), 'court_settings_close', _close,
               kCourtTimes, (t) => setState(() => _close = t))),
           ]),
+          const SizedBox(height: spaceLg),
+          choiceLabel(tr('איפה המגרש?', 'Where is the court?')),
+          appTextField(
+            controller: _addressCtrl,
+            label: tr('כתובת, למשל: פאולוס השישי 12, נצרת', 'Address, e.g. 12 Main St, Nazareth'),
+            icon: Icons.place_outlined,
+            identifier: 'court_settings_address',
+          ),
+          const SizedBox(height: spaceSm),
+          appTextField(
+            controller: _mapsCtrl,
+            label: tr('קישור מ-Waze או Google Maps (לא חובה)', 'Waze or Google Maps link (optional)'),
+            icon: Icons.link,
+            keyboardType: TextInputType.url,
+            identifier: 'court_settings_maps',
+          ),
+          const SizedBox(height: 4),
+          Text(tr('השחקנים יקבלו כפתור "נווט" ב-Waze וב-Google Maps.', 'Players get a "Navigate" button for Waze and Google Maps.'),
+            style: TextStyle(color: textSecondary, fontSize: 12)),
+          const SizedBox(height: spaceLg),
+          choiceLabel(tr('מה יש במגרש?', 'What does the court have?')),
+          Semantics(identifier: 'court_settings_amenities', container: true, child: Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final e in kAmenities.entries)
+              FilterChip(
+                selected: _amenities.contains(e.key),
+                onSelected: (v) => setState(() => v ? _amenities.add(e.key) : _amenities.remove(e.key)),
+                avatar: Icon(e.value.$3, size: 16, color: _amenities.contains(e.key) ? Colors.white : accentGreen),
+                label: Text(tr(e.value.$1, e.value.$2)),
+                showCheckmark: false,
+                selectedColor: accentGreen,
+                backgroundColor: cardColor,
+                labelStyle: TextStyle(color: _amenities.contains(e.key) ? Colors.white : textPrimary, fontWeight: FontWeight.w700),
+                side: BorderSide(color: _amenities.contains(e.key) ? accentGreen : borderColor),
+              ),
+          ])),
           if (_error.isNotEmpty) ...[
             const SizedBox(height: spaceSm),
             Text(_error, style: TextStyle(color: colorError, fontWeight: FontWeight.w700)),
@@ -5237,6 +5566,10 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
           ),
           const SizedBox(height: spaceSm),
           _adminHint(tr('שינוי אורך ההזמנה או השעות לא משנה הזמנות שכבר נקבעו.', "Changing the length or hours doesn't change existing bookings.")),
+          const SizedBox(height: spaceXl),
+          choiceLabel(tr('תמונות המגרש', 'Court photos')),
+          CourtPhotosEditor(courtId: widget.court['id'] as String),
+          const SizedBox(height: spaceXl),
         ])),
       )),
     );
@@ -6147,7 +6480,7 @@ class SchoolAdminView extends StatelessWidget {
               label: Text(tr('שלח בוואטסאפ', 'Send on WhatsApp'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF25D366),
-                foregroundColor: Colors.white,
+                foregroundColor: Colors.white, iconColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
               ),
@@ -7753,7 +8086,7 @@ class _SchoolSignupCard extends StatelessWidget {
                 onPressed: open,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: colorInfo,
-                  foregroundColor: Colors.white,
+                  foregroundColor: Colors.white, iconColor: Colors.white,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
@@ -7779,7 +8112,6 @@ class _VenueCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final id = venue['id'] as String;
     final ids = (venue['stadiumIds'] as List? ?? const []).cast<String>();
-    final emoji = venue['emoji'] as String? ?? '🏟️';
     final name = isHebrew ? (venue['name'] as String? ?? '') : (venue['nameEn'] as String? ?? venue['name'] as String? ?? '');
     final city = cityLabel(venueCityKey(venue));
     final sports = sportsOfVenue(venue);
@@ -7794,89 +8126,105 @@ class _VenueCard extends StatelessWidget {
     final lowest = rates.isEmpty ? null : rates.reduce((a, b) => a < b ? a : b);
     final priceText = lowest == null ? null
         : '${rates.toSet().length > 1 ? tr('החל מ-', 'from ') : ''}₪$lowest / ${tr('שעה', 'hour')}';
+    final photo = photoBytes(venueThumb(venue));
+    final amen = <String>{
+      for (final s in allStadiums) if (ids.contains(s['id'])) ...courtAmenities(s),
+    }.take(3).toList();
 
-    final thumb = StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('venue_config').doc(id).snapshots(),
-      builder: (ctx, snap) {
-        final bg = snap.hasData && snap.data!.exists ? (snap.data!.data()?['backgroundImage'] as String?) : null;
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(radiusLg),
-          child: Container(
-            width: 64, height: 64,
-            color: accentGreen.withValues(alpha: 0.12),
-            alignment: Alignment.center,
-            child: bg != null && bg.isNotEmpty
-                ? Image.network(bg, width: 64, height: 64, fit: BoxFit.cover, cacheWidth: 192,
-                    errorBuilder: (_, __, ___) => Text(emoji, style: const TextStyle(fontSize: 30)))
-                : Text(emoji, style: const TextStyle(fontSize: 30)),
+    final header = SizedBox(
+      height: 150,
+      child: Stack(fit: StackFit.expand, children: [
+        if (photo != null && photo.isNotEmpty)
+          Image.memory(photo, fit: BoxFit.cover, gaplessPlayback: true)
+        else
+          Container(
+            decoration: BoxDecoration(gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
+              colors: [accentGreen, accentGreen.withValues(alpha: 0.55)],
+            )),
+            child: Center(child: Icon(sportIcon(sport), size: 64, color: Colors.white.withValues(alpha: 0.9))),
           ),
-        );
-      },
+        // Dark fade at the bottom so the name stays readable on any photo.
+        const DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Color(0xA6000000)], stops: [0.4, 1],
+        ))),
+        PositionedDirectional(top: 10, start: 10, child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(20)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(sportIcon(sport), size: 13, color: Colors.white),
+            const SizedBox(width: 4),
+            Text(sports.map(sportLabel).join(' / '), style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+          ]),
+        )),
+        PositionedDirectional(bottom: 10, start: 12, end: 12, child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w900,
+              shadows: [Shadow(blurRadius: 6, color: Colors.black54)]))),
+          if (priceText != null)
+            Semantics(identifier: 'venue_price_$id', container: true, child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+              child: Text(priceText, style: const TextStyle(color: Color(0xFF0A7D2C), fontSize: 13, fontWeight: FontWeight.w900)),
+            )),
+        ])),
+      ]),
     );
 
     final card = Material(
       color: cardColor,
       borderRadius: BorderRadius.circular(radiusXl),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(radiusXl),
         child: Container(
-          padding: const EdgeInsets.all(spaceSm),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radiusXl),
             border: Border.all(color: borderColor),
           ),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(children: [
-              thumb,
-              const SizedBox(width: spaceSm),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
-                  const SizedBox(height: 4),
+            header,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(spaceSm, spaceSm, spaceSm, spaceSm),
+              child: Row(children: [
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Row(children: [
-                    Icon(Icons.location_on_outlined, size: 14, color: textSecondary),
+                    Icon(Icons.location_on_outlined, size: 15, color: textSecondary),
                     const SizedBox(width: 2),
-                    Flexible(child: Text(city, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
+                    Flexible(child: Text('$city · $courtsText', maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600))),
                   ]),
-                  const SizedBox(height: 2),
-                  Row(children: [
-                    Icon(sportIcon(sport), size: 14, color: textSecondary),
-                    const SizedBox(width: 2),
-                    Flexible(child: Text(courtsText, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600))),
-                  ]),
-                  if (priceText != null) ...[
-                    const SizedBox(height: 4),
-                    Semantics(
-                      identifier: 'venue_price_$id',
-                      container: true,
-                      child: Text(priceText, maxLines: 1, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w900)),
-                    ),
+                  if (amen.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 10, children: [
+                      for (final k in amen) Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(kAmenities[k]!.$3, size: 13, color: accentGreen),
+                        const SizedBox(width: 3),
+                        Text(tr(kAmenities[k]!.$1, kAmenities[k]!.$2), style: TextStyle(color: textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
+                      ]),
+                    ]),
                   ],
-                ]),
-              ),
-              const SizedBox(width: spaceXs),
-              Semantics(
-                identifier: 'venue_book_$id',
-                button: true,
-                container: true,
-                child: ElevatedButton(
-                  onPressed: onTap,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: accentGreen,
-                    foregroundColor: bgColor,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                ])),
+                const SizedBox(width: spaceXs),
+                Semantics(
+                  identifier: 'venue_book_$id',
+                  button: true,
+                  container: true,
+                  child: ElevatedButton(
+                    onPressed: onTap,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: accentGreen,
+                      foregroundColor: Colors.white, iconColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    ),
+                    child: Text(tr('הזמן', 'Book'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
                   ),
-                  child: Text(tr('הזמן', 'Book'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
                 ),
-              ),
-            ]),
+              ]),
+            ),
           ]),
         ),
       ),
@@ -7945,7 +8293,7 @@ class StadiumCard extends StatelessWidget {
             Row(children: [Icon(Icons.location_on_outlined, color: textSecondary, size: 14), const SizedBox(width: 2), Text(stadium['location'], style: TextStyle(color: textSecondary, fontSize: 13))]),
           ])),
           ElevatedButton(onPressed: () => navigateTo(context, BookingScreen(stadium: stadium)),
-            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
+            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
             child: Text(tr('הזמן','BOOK'), style: const TextStyle(fontWeight: FontWeight.w900))),
         ])),
       ])),
@@ -7963,6 +8311,9 @@ class BookingScreen extends StatefulWidget {
 }
 class _BookingScreenState extends State<BookingScreen> {
   int _selDay = 0; int? _selSlot; bool _booking = false;
+  /// The court's photos (court_photos), shown at the top.
+  List<Uint8List> _photos = [];
+  int _photoIdx = 0;
   late List<Map<String, String>> _days;
   Set<String> _bookedSlots = {}, _blockedSlots = {};
   late List<Map<String, String>> _slots = defaultSlotsForStadium(widget.stadium);
@@ -7986,7 +8337,114 @@ class _BookingScreenState extends State<BookingScreen> {
   List<Map<String, dynamic>> _trainingGroups = [];
   List<Map<String, dynamic>> _recurringBlocks = [];
 
-  @override void initState() { super.initState(); _selDay = widget.initialDay; _buildDays(); _loadData(); }
+  @override void initState() { super.initState(); _selDay = widget.initialDay; _buildDays(); _loadData(); _loadPhotos(); }
+
+  Future<void> _loadPhotos() async {
+    try {
+      final d = await FirebaseFirestore.instance.collection('court_photos').doc(widget.stadium['id'] as String).get();
+      final list = [
+        for (final b64 in ((d.data()?['photos'] as List?) ?? const []).cast<String>())
+          if ((photoBytes(b64) ?? Uint8List(0)).isNotEmpty) photoBytes(b64)!,
+      ];
+      if (mounted && list.isNotEmpty) setState(() => _photos = list);
+    } catch (_) {/* the thumbnail or the plain header is enough */}
+  }
+
+  /// Big header: the court's photos (swipe), its name, place and address.
+  Widget _hero() {
+    final venue = venueForStadium(widget.stadium['id'] as String);
+    final thumb = photoBytes(widget.stadium['thumb'] as String?);
+    final images = _photos.isNotEmpty ? _photos : [if (thumb != null && thumb.isNotEmpty) thumb];
+    final sport = sportOf(widget.stadium);
+    final place = [sportLabel(sport), if (venue != null) venue['name'] as String, if (venue != null) cityLabel(venueCityKey(venue))].join(' · ');
+    return Semantics(identifier: 'booking_hero', container: true, child: ClipRRect(
+      borderRadius: BorderRadius.circular(radiusXl),
+      child: SizedBox(height: 210, child: Stack(fit: StackFit.expand, children: [
+        if (images.isEmpty)
+          Container(
+            decoration: BoxDecoration(gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart, end: AlignmentDirectional.bottomEnd,
+              colors: [accentGreen, accentGreen.withValues(alpha: 0.55)],
+            )),
+            child: Align(alignment: const Alignment(0, -0.3),
+              child: Icon(sportIcon(sport), size: 72, color: Colors.white.withValues(alpha: 0.9))),
+          )
+        else
+          PageView.builder(
+            itemCount: images.length,
+            onPageChanged: (i) => setState(() => _photoIdx = i),
+            itemBuilder: (_, i) => Image.memory(images[i], fit: BoxFit.cover, gaplessPlayback: true),
+          ),
+        const IgnorePointer(child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Color(0xB3000000)], stops: [0.35, 1],
+        )))),
+        PositionedDirectional(bottom: 14, start: 16, end: 16, child: IgnorePointer(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(place, style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(widget.stadium['name'] as String, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900)),
+            if (courtAddress(widget.stadium).isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Row(children: [
+                const Icon(Icons.place_outlined, size: 14, color: Colors.white70),
+                const SizedBox(width: 3),
+                Flexible(child: Text(courtAddress(widget.stadium), maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 13))),
+              ]),
+            ],
+          ],
+        ))),
+        if (images.length > 1)
+          Positioned(top: 10, left: 0, right: 0, child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            for (var i = 0; i < images.length; i++)
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: i == _photoIdx ? 18 : 7, height: 7,
+                decoration: BoxDecoration(color: Colors.white.withValues(alpha: i == _photoIdx ? 1 : 0.6), borderRadius: BorderRadius.circular(4)),
+              ),
+          ])),
+      ])),
+    ));
+  }
+
+  /// Bottom bar once a time is picked: price, the time, and "Book now".
+  Widget? _bookBar() {
+    final i = _selSlot;
+    if (i == null || i >= _visibleSlots.length) return null;
+    final label = _slotLabel(_visibleSlots[i]);
+    final price = _selectedType?['price'] ?? widget.stadium['price'];
+    return Container(
+      decoration: BoxDecoration(
+        color: cardColor,
+        border: Border(top: BorderSide(color: borderColor)),
+        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 12, offset: Offset(0, -2))],
+      ),
+      child: SafeArea(top: false, child: Padding(
+        padding: const EdgeInsets.fromLTRB(spaceMd, spaceSm, spaceMd, spaceSm),
+        child: Center(heightFactor: 1, child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Row(children: [
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(tr('מחיר', 'Price'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+            Text('₪$price', style: TextStyle(color: textPrimary, fontSize: 26, fontWeight: FontWeight.w900, height: 1.1)),
+            Text('${_selDay == 0 ? tr('היום', 'Today') : _selDay == 1 ? tr('מחר', 'Tomorrow') : _days[_selDay]['name']} ${_days[_selDay]['date']} · \u200E$label',
+              style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+          ])),
+          Semantics(identifier: 'book_now', button: true, container: true, child: SizedBox(height: 54, child: ElevatedButton.icon(
+            onPressed: _booking ? null : _book,
+            icon: const Icon(Icons.check_circle_outline, size: 20),
+            label: Text(tr('הזמן עכשיו', 'Book now'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: accentGreen, foregroundColor: Colors.white, iconColor: Colors.white, elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 26),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            ),
+          ))),
+        ]))),
+      )),
+    );
+  }
 
   void _switchCourt(Map<String, dynamic> court) {
     if (court['id'] == widget.stadium['id']) return;
@@ -8388,7 +8846,7 @@ class _BookingScreenState extends State<BookingScreen> {
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: accentGreen,
-                        foregroundColor: bgColor,
+                        foregroundColor: bgColor, iconColor: bgColor,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
                         elevation: 0,
@@ -8560,6 +9018,10 @@ class _BookingScreenState extends State<BookingScreen> {
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
           child: Column(children: [Text(widget.stadium['name'], style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)), Text('${_days[_selDay]['name']} $date • $label', style: TextStyle(color: textSecondary, fontSize: 13))])),
+        if (courtHasLocation(widget.stadium)) ...[
+          const SizedBox(height: 12),
+          navigateButtons(dialogContext, widget.stadium),
+        ],
         if (_payMethod == 'paybox') ...[
           const SizedBox(height: 14),
           Semantics(identifier: 'booking_pay_now', button: true, container: true, child: SizedBox(
@@ -8568,7 +9030,7 @@ class _BookingScreenState extends State<BookingScreen> {
               onPressed: () => openPaybox(dialogContext, widget.stadium),
               icon: const Icon(Icons.phone_iphone, size: 20),
               label: Text(tr('שלם ₪$typePrice ב-PayBox', 'Pay ₪$typePrice with PayBox'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white, iconColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             ),
           )),
@@ -8593,9 +9055,10 @@ class _BookingScreenState extends State<BookingScreen> {
             style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
         ],
         const SizedBox(height: 20),
-        BookingSharePanel(bookingId: slotKey, code: code, summary: '${widget.stadium['name']} • ${_days[_selDay]['name']} $date • $label'),
+        BookingSharePanel(bookingId: slotKey, code: code, summary: '${widget.stadium['name']} • ${_days[_selDay]['name']} $date • $label'
+            '${courtHasLocation(widget.stadium) ? '\n📍 ${courtAddress(widget.stadium).isNotEmpty ? '${courtAddress(widget.stadium)} ' : ''}${wazeUri(widget.stadium)}' : ''}'),
       ]),
-      actions: [ElevatedButton(onPressed: () => Navigator.pop(dialogContext), style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: Text(tr('הבנתי','GOT IT'), style: const TextStyle(fontWeight: FontWeight.w900)))],
+      actions: [ElevatedButton(onPressed: () => Navigator.pop(dialogContext), style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))), child: Text(tr('הבנתי','GOT IT'), style: const TextStyle(fontWeight: FontWeight.w900)))],
     ));
   }
 
@@ -8684,7 +9147,7 @@ class _BookingScreenState extends State<BookingScreen> {
             container: true,
             child: ElevatedButton(
               onPressed: time == null ? null : () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, elevation: 0),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white, iconColor: Colors.white, elevation: 0),
               child: Text(tr('שלח בקשה', 'Send request'), style: const TextStyle(fontWeight: FontWeight.w900)),
             ),
           ),
@@ -8734,6 +9197,7 @@ class _BookingScreenState extends State<BookingScreen> {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: PlayerAppBar(title: widget.stadium['name'] as String),
+      bottomNavigationBar: _bookBar(),
       body: SafeArea(
         child: Column(
           children: [
@@ -8754,11 +9218,21 @@ class _BookingScreenState extends State<BookingScreen> {
                         // soon as this screen builds, before the async
                         // Firestore load finishes — a reliable "arrived"
                         // signal for E2E tests that doesn't wait on data.
+                        _hero(),
+                        const SizedBox(height: spaceMd),
+                        if (courtAmenities(widget.stadium).isNotEmpty) ...[
+                          amenityChips(courtAmenities(widget.stadium)),
+                          const SizedBox(height: spaceMd),
+                        ],
+                        if (courtHasLocation(widget.stadium)) ...[
+                          navigateButtons(context, widget.stadium),
+                          const SizedBox(height: spaceMd),
+                        ],
                         if ((widget.courts?.length ?? 0) > 1) _courtPicker(),
                         appSectionTitle(tr('בחר תאריך', 'SELECT DATE'), identifier: 'booking_screen'),
                         const SizedBox(height: spaceXs),
                         SizedBox(
-                          height: 76,
+                          height: 88,
                           child: ListView.separated(
                             scrollDirection: Axis.horizontal,
                             itemCount: _days.length,
@@ -8785,17 +9259,25 @@ class _BookingScreenState extends State<BookingScreen> {
                                       Text(
                                         i == 0 ? tr('היום', 'Today') : i == 1 ? tr('מחר', 'Tmrw') : d['name'] as String,
                                         style: TextStyle(
-                                          color: selected ? bgColor : textSecondary,
+                                          color: selected ? Colors.white : textSecondary,
                                           fontSize: 11, fontWeight: FontWeight.w700,
                                           letterSpacing: isHebrew ? 0 : 1,
                                         ),
                                       ),
-                                      const SizedBox(height: 4),
+                                      const SizedBox(height: 2),
                                       Text(
-                                        d['date'] as String,
+                                        (d['date'] as String).split('/').first,
                                         style: TextStyle(
-                                          color: selected ? bgColor : textPrimary,
-                                          fontSize: 14, fontWeight: FontWeight.w900,
+                                          color: selected ? Colors.white : textPrimary,
+                                          fontSize: 24, fontWeight: FontWeight.w900, height: 1.1,
+                                        ),
+                                      ),
+                                      Text(
+                                        '/${(d['date'] as String).split('/').last}',
+                                        textDirection: TextDirection.ltr,
+                                        style: TextStyle(
+                                          color: selected ? Colors.white70 : textTertiary,
+                                          fontSize: 10, fontWeight: FontWeight.w700,
                                         ),
                                       ),
                                     ],
@@ -8854,9 +9336,9 @@ class _BookingScreenState extends State<BookingScreen> {
                         const SizedBox(height: spaceXs),
                         Text(
                           _selectedType?['price'] != null
-                              ? tr('לחץ על שעה פנויה כדי להזמין · ₪${_selectedType!['price']} להזמנה',
-                                   'Tap a free time to book · ₪${_selectedType!['price']} per booking')
-                              : tr('לחץ על שעה פנויה כדי להזמין', 'Tap a free time to book'),
+                              ? tr('בחר שעה פנויה · ₪${_selectedType!['price']} להזמנה',
+                                   'Pick a free time · ₪${_selectedType!['price']} per booking')
+                              : tr('בחר שעה פנויה', 'Pick a free time'),
                           style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: spaceMd),
@@ -8898,8 +9380,9 @@ class _BookingScreenState extends State<BookingScreen> {
                                 status: status,
                                 trainingName: status == 'training' ? _trainingNameFor(label) : null,
                                 fixedReason: status == 'fixed' ? _recurringReasonFor(label) : null,
+                                selected: _selSlot == i,
                                 onTap: (status == 'available' && !_booking)
-                                    ? () { setState(() => _selSlot = i); _book(); }
+                                    ? () => setState(() => _selSlot = _selSlot == i ? null : i)
                                     : null,
                               );
                             },
@@ -8949,6 +9432,7 @@ class _SlotCard extends StatelessWidget {
   final String? trainingName;
   final String? fixedReason;
   final VoidCallback? onTap;
+  final bool selected;
 
   const _SlotCard({
     required this.label,
@@ -8956,6 +9440,7 @@ class _SlotCard extends StatelessWidget {
     this.trainingName,
     this.fixedReason,
     this.onTap,
+    this.selected = false,
   });
 
   @override
@@ -8965,11 +9450,16 @@ class _SlotCard extends StatelessWidget {
 
     // Players see two states only: free (green, tappable) or taken (dim).
     // Why a time is taken (booking, training, fixed, closed) is the admin's business.
-    if (status == 'available') {
+    if (status == 'available' && selected) {
+      bgClr = accentGreen;
+      brdClr = accentGreen;
+      txtClr = Colors.white;
+      badge = isHebrew ? 'נבחר ✓' : 'SELECTED ✓';
+    } else if (status == 'available') {
       bgClr = accentGreen.withValues(alpha: 0.08);
       brdClr = accentGreen.withValues(alpha: 0.6);
       txtClr = accentGreen;
-      badge = isHebrew ? 'פנוי · להזמנה' : 'FREE · BOOK';
+      badge = isHebrew ? 'פנוי' : 'FREE';
     } else {
       bgClr = cardColor.withValues(alpha: 0.4);
       brdClr = borderColor.withValues(alpha: 0.5);
@@ -9349,7 +9839,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
       if (_booking==null&&_success.isEmpty) ...[
         const SizedBox(height: 16),
         SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_find,
-          style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
           child: _loading?SizedBox(width:20,height:20,child:CircularProgressIndicator(color:bgColor,strokeWidth:2)):Text(tr('חפש הזמנה','FIND BOOKING'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
       ],
       if (_booking!=null) ...[
@@ -9366,7 +9856,7 @@ class _JoinByCodeScreenState extends State<JoinByCodeScreen> {
         const SizedBox(height: 14),
         if (_success.isEmpty) ...[
           if (!_joined) SizedBox(width: double.infinity, height: 52, child: ElevatedButton(onPressed: _loading?null:_join,
-            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             child: Text(tr('הצטרף לקבוצה','JOIN TEAM'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 2)))),
           if (_joined) ...[
             Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10), border: Border.all(color: accentGreen.withValues(alpha: 0.3))),
@@ -10068,7 +10558,7 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
                         ? tr('שלם את היתרה ₪${bookingMissingAmount(b)} ב-PayBox', 'Pay the ₪${bookingMissingAmount(b)} left with PayBox')
                         : tr('שלם ₪${bookingAmount(b)} ב-PayBox', 'Pay ₪${bookingAmount(b)} with PayBox'),
                       style: const TextStyle(fontWeight: FontWeight.w900)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white, iconColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                   ),
                 ))
@@ -10265,7 +10755,7 @@ class _BookingTypesScreenState extends State<BookingTypesScreen> {
               onPressed: _loading ? null : _loadDefaults,
               icon: _loading ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: bgColor, strokeWidth: 2)) : const Icon(Icons.download_outlined, size: 18),
               label: Text(tr('טען ברירות מחדל', 'Load Defaults')),
-              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
+              style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
             ),
           ]));
         }
@@ -10966,7 +11456,7 @@ class _StadiumImageScreenState extends State<StadiumImageScreen> {
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
                 label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
               const SizedBox(height: 10),
@@ -11199,7 +11689,7 @@ class _VenueImageScreenState extends State<VenueImageScreen> {
                 onPressed: _pickAndUpload,
                 icon: const Icon(Icons.add_photo_alternate_outlined, size: 22),
                 label: Text(tr('בחר תמונה מהגלריה', 'CHOOSE IMAGE FROM GALLERY'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: bgColor, iconColor: bgColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               )),
             if (_currentUrl != null) ...[
               const SizedBox(height: 10),
@@ -11596,7 +12086,7 @@ class _TrainingGroupDetailScreenState extends State<TrainingGroupDetailScreen> {
                     onPressed: () => _register(context),
                     icon: const Icon(Icons.how_to_reg),
                     label: Text(tr('הירשם לקבוצה', 'REGISTER'), style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: isHebrew ? 0 : 1)),
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white, iconColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                   )),
               const SizedBox(height: 24),
             ]);
@@ -12174,7 +12664,7 @@ class _PlayerAppBarState extends State<PlayerAppBar> {
                         onPressed: () => Navigator.pop(context, true),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+                          foregroundColor: Colors.white, iconColor: Colors.white,
                         ),
                         child: Text(tr('יציאה', 'Sign Out'), style: const TextStyle(fontWeight: FontWeight.w900)),
                       ),
@@ -12312,7 +12802,7 @@ class _AdminAppBarState extends State<AdminAppBar> {
                         onPressed: () => Navigator.pop(context, true),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+                          foregroundColor: Colors.white, iconColor: Colors.white,
                         ),
                         child: Text(tr('יציאה', 'Sign Out'), style: const TextStyle(fontWeight: FontWeight.w900)),
                       ),
