@@ -1334,27 +1334,47 @@ class GuestGate extends StatelessWidget {
 // DESIGN SYSTEM - STADIUM v1.0
 // ====================================================
 
-// Colors. The default look is dark olive with a lime accent; light is one
-// tap away and the choice is saved per device.
+// Colors. Light is one tap away and the choice is saved per device; the
+// dark look comes from one of the palettes below.
 bool isLightMode = false;
-Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : 0xFF13150F);
-Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : 0xFF191C14);
-Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : 0xFF22261B);
-Color get borderColor => Color(isLightMode ? 0xFFDDE1E6 : 0xFF333A29);
-Color get borderActive => Color(isLightMode ? 0xFFC4CAD1 : 0xFF48513A);
 
-Color get accentGreen => Color(isLightMode ? 0xFF00843D : 0xFFC6E06A);
-Color get accentGreenSoft => Color(isLightMode ? 0x3300843D : 0x33C6E06A);
-/// Text and icons on top of the accent (white on green, dark on lime).
-Color get onAccent => Color(isLightMode ? 0xFFFFFFFF : 0xFF1A1D12);
+/// Dark palettes: bg, bgSecondary, card, border, borderActive, accent,
+/// onAccent (text on the accent), text 1/2/3, cover gradient (2).
+const Map<String, List<int>> kDarkPalettes = {
+  // Deep green-black with an emerald accent.
+  'emerald': [0xFF0E1311, 0xFF121A16, 0xFF18221D, 0xFF25312B, 0xFF34433B,
+              0xFF2FBF71, 0xFFFFFFFF, 0xFFF2F5F3, 0xFFA3AEA8, 0xFF6A7570, 0xFF1E4A34, 0xFF0F1F18],
+  // Charcoal with a soft gold accent.
+  'gold':    [0xFF111214, 0xFF16171A, 0xFF1C1E22, 0xFF2B2E34, 0xFF3A3E46,
+              0xFFC9A55C, 0xFF17130B, 0xFFF4F1EA, 0xFFB0AA9D, 0xFF726D63, 0xFF3B3122, 0xFF17140F],
+  // Navy with a mint accent.
+  'navy':    [0xFF0C1320, 0xFF101A2A, 0xFF162235, 0xFF24324A, 0xFF33445F,
+              0xFF5CD3A0, 0xFF0A1A13, 0xFFF1F5FA, 0xFFA2AFC2, 0xFF6A778A, 0xFF1C3A5C, 0xFF0D1A2B],
+  // The olive + lime look.
+  'olive':   [0xFF13150F, 0xFF191C14, 0xFF22261B, 0xFF333A29, 0xFF48513A,
+              0xFFC6E06A, 0xFF1A1D12, 0xFFF1F3EA, 0xFFA6AD98, 0xFF6F7765, 0xFF3E4C1F, 0xFF1C2213],
+};
+String darkPalette = 'emerald';
+List<int> get _dp => kDarkPalettes[darkPalette] ?? kDarkPalettes['emerald']!;
+
+Color get bgColor => Color(isLightMode ? 0xFFF4F5F7 : _dp[0]);
+Color get bgSecondary => Color(isLightMode ? 0xFFECEEF1 : _dp[1]);
+Color get cardColor => Color(isLightMode ? 0xFFFFFFFF : _dp[2]);
+Color get borderColor => Color(isLightMode ? 0xFFDDE1E6 : _dp[3]);
+Color get borderActive => Color(isLightMode ? 0xFFC4CAD1 : _dp[4]);
+
+Color get accentGreen => Color(isLightMode ? 0xFF00843D : _dp[5]);
+Color get accentGreenSoft => accentGreen.withValues(alpha: 0.2);
+/// Text and icons on top of the accent.
+Color get onAccent => Color(isLightMode ? 0xFFFFFFFF : _dp[6]);
 /// Cover for courts without a photo.
 List<Color> get coverGradient => isLightMode
     ? [const Color(0xFF00843D), const Color(0xFF3FA66B)]
-    : [const Color(0xFF3E4C1F), const Color(0xFF1C2213)];
+    : [Color(_dp[10]), Color(_dp[11])];
 
-Color get textPrimary => Color(isLightMode ? 0xFF14181D : 0xFFF1F3EA);
-Color get textSecondary => Color(isLightMode ? 0xFF566070 : 0xFFA6AD98);
-Color get textTertiary => Color(isLightMode ? 0xFF7A8391 : 0xFF6F7765);
+Color get textPrimary => Color(isLightMode ? 0xFF14181D : _dp[7]);
+Color get textSecondary => Color(isLightMode ? 0xFF566070 : _dp[8]);
+Color get textTertiary => Color(isLightMode ? 0xFF7A8391 : _dp[9]);
 
 Color get colorError => Color(isLightMode ? 0xFFD32F2F : 0xFFF44336);
 Color get colorWarning => Color(isLightMode ? 0xFFB85C00 : 0xFFFF9800);
@@ -1362,9 +1382,9 @@ Color get colorInfo => Color(isLightMode ? 0xFF1565C0 : 0xFF2196F3);
 Color get accentAmber => Color(isLightMode ? 0xFF9A6200 : 0xFFFFC107);
 Color get accentOrange => Color(isLightMode ? 0xFFB45309 : 0xFFF59E0B);
 Color get accentTeal => Color(isLightMode ? 0xFF0F766E : 0xFF14B8A6);
-Color get mutedIcon => Color(isLightMode ? 0xFFC4CAD1 : 0xFF3A4130);
-Color get bgMuted => Color(isLightMode ? 0xFFECEEF1 : 0xFF181B12);
-Color get gradientEnd => Color(isLightMode ? 0xFFFFFFFF : 0xFF181B12);
+Color get mutedIcon => isLightMode ? const Color(0xFFC4CAD1) : borderActive;
+Color get bgMuted => isLightMode ? const Color(0xFFECEEF1) : bgSecondary;
+Color get gradientEnd => isLightMode ? const Color(0xFFFFFFFF) : bgSecondary;
 
 /// Also used for date pickers, which are shown outside the screens' own colours.
 ThemeData appThemeData() {
@@ -1376,7 +1396,7 @@ ThemeData appThemeData() {
         : ColorScheme.dark(primary: accentGreen, surface: cardColor, onPrimary: onAccent, outlineVariant: borderColor),
     // Snack bars sit on the accent / status colours: dark text reads on lime.
     snackBarTheme: SnackBarThemeData(
-      contentTextStyle: TextStyle(color: isLightMode ? Colors.white : const Color(0xFF14160F),
+      contentTextStyle: TextStyle(color: onAccent,
         fontFamily: 'Heebo', fontWeight: FontWeight.w700),
       behavior: SnackBarBehavior.floating,
     ),
