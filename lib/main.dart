@@ -6747,6 +6747,37 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
     }
   }
 
+  /// Fixes a court's sport (courts opened before the form had a sport
+  /// choice were saved as football). Players per booking goes back to the
+  /// new sport's default.
+  Future<void> _changeSport(Map<String, dynamic> court) async {
+    final current = sportOf(court);
+    final picked = await showDialog<String>(context: context, builder: (dctx) => SimpleDialog(
+      backgroundColor: cardColor,
+      title: Text(tr('סוג הספורט של ${court['name']}', 'Sport of ${court['name']}'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+      children: [
+        for (final sp in const [kSportFootball, kSportPadel, kSportTennis])
+          Semantics(identifier: 'court_sport_pick_$sp', container: true, button: true, child: SimpleDialogOption(
+            onPressed: () => Navigator.pop(dctx, sp),
+            child: Row(children: [
+              Icon(sportIcon(sp), color: sp == current ? accentGreen : textSecondary),
+              const SizedBox(width: 10),
+              Expanded(child: Text(sportLabel(sp), style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: sp == current ? FontWeight.w900 : FontWeight.w600))),
+              if (sp == current) Icon(Icons.check, color: accentGreen),
+            ]),
+          )),
+      ],
+    ));
+    if (picked == null || picked == current) return;
+    try {
+      await _courtsCol.doc(court['id'] as String).set({'type': picked, 'maxPlayers': FieldValue.delete()}, SetOptions(merge: true));
+      await _reload();
+      _toast(tr('${court['name']} עכשיו ${sportLabel(picked)}', '${court['name']} is now ${sportLabel(picked)}'));
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    }
+  }
+
   void _openSchedule(Map<String, dynamic> court) {
     navigateTo(context, Scaffold(
       backgroundColor: bgColor,
@@ -6792,6 +6823,16 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
             Icon(sportIcon(sport), color: accentGreen, size: 20),
             const SizedBox(width: 8),
             Expanded(child: Text(court['name'] as String, style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 15))),
+            Semantics(
+              identifier: 'court_sport_$id',
+              container: true,
+              button: true,
+              child: TextButton.icon(
+                onPressed: () => _changeSport(court),
+                icon: Icon(Icons.edit_outlined, size: 15, color: accentGreen),
+                label: Text(tr('שנה ספורט', 'Change sport'), style: TextStyle(color: accentGreen, fontSize: 12, fontWeight: FontWeight.w700)),
+              ),
+            ),
           ]),
           const SizedBox(height: 4),
           Text(details, style: TextStyle(color: textSecondary, fontSize: 12)),
