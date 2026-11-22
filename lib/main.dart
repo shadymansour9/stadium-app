@@ -80,6 +80,27 @@ String sportOf(Map<String, dynamic>? stadium) {
 
 bool isRacketSport(String sport) => sport == kSportPadel || sport == kSportTennis;
 
+/// How a court takes payment, as the court admin chose: 'cash' (at the
+/// court) and/or 'paybox'. Only the person who booked pays, for the whole
+/// booking; friends who join settle with them, not with the court.
+List<String> courtPayMethods(Map<String, dynamic>? court) => [
+  if (court?['payCash'] != false) 'cash',
+  if (court?['payPaybox'] == true && payboxLinkOf(court).isNotEmpty) 'paybox',
+];
+
+String payboxLinkOf(Map<String, dynamic>? court) => ((court?['payboxLink'] as String?) ?? '').trim();
+
+String payMethodLabel(String? m) => m == 'paybox' ? 'PayBox' : tr('מזומן במגרש', 'Cash at the court');
+
+/// A booking counts as paid only when the court admin marked it.
+bool bookingPaid(Map<String, dynamic> b) => b['paymentStatus'] == 'paid';
+
+/// Opens the court's PayBox link (the one the admin pasted from the app).
+Future<void> openPaybox(BuildContext context, Map<String, dynamic>? court) {
+  final link = payboxLinkOf(court);
+  return openExternalLink(context, Uri.parse(link.startsWith('http') ? link : 'https://$link'));
+}
+
 /// Most players in one booking on this court: the court admin's setting,
 /// else 4 for padel/tennis and 15 for football.
 int courtMaxPlayers(Map<String, dynamic>? court) =>
@@ -4887,6 +4908,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   late final TextEditingController _phoneCtrl;
   late int _slotMinutes;
   late int _maxPlayers;
+  late bool _payCash;
+  late bool _payPaybox;
+  late final TextEditingController _payboxCtrl;
   late String _open;
   late String _close;
   bool _saving = false;
@@ -4897,6 +4921,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
     super.initState();
     final c = widget.court;
     _maxPlayers = courtMaxPlayers(c);
+    _payCash = c['payCash'] != false;
+    _payPaybox = c['payPaybox'] == true;
+    _payboxCtrl = TextEditingController(text: payboxLinkOf(c));
     final p = (c['pricePerHour'] as num?)?.round();
     _priceCtrl = TextEditingController(text: p?.toString() ?? '');
     _phoneCtrl = TextEditingController(text: (c['contactPhone'] as String?) ?? '');
@@ -4911,6 +4938,7 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
   void dispose() {
     _priceCtrl.dispose();
     _phoneCtrl.dispose();
+    _payboxCtrl.dispose();
     super.dispose();
   }
 
@@ -4943,6 +4971,14 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
       setState(() => _error = tr('בין שעת הפתיחה לסגירה אין מספיק זמן להזמנה אחת', 'The opening hours are too short for one booking'));
       return;
     }
+    if (!_payCash && !_payPaybox) {
+      setState(() => _error = tr('בחר לפחות דרך תשלום אחת', 'Choose at least one way to pay'));
+      return;
+    }
+    if (_payPaybox && _payboxCtrl.text.trim().isEmpty) {
+      setState(() => _error = tr('הדבק את קישור התשלום שלך מ-PayBox', 'Paste your PayBox payment link'));
+      return;
+    }
     final pricePerHour = int.parse(_priceCtrl.text.trim());
     setState(() => _saving = true);
     try {
@@ -4954,6 +4990,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
         'slotMinutes': _slotMinutes,
         'maxPlayers': _maxPlayers,
         'contactPhone': _phoneCtrl.text.trim(),
+        'payCash': _payCash,
+        'payPaybox': _payPaybox,
+        'payboxLink': _payboxCtrl.text.trim(),
       }).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -5021,6 +5060,45 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
                     'Price for ${slotLengthLabel(_slotMinutes)}: ₪${_priceForSlot(price, _slotMinutes)}'),
               style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w700)),
           ],
+          const SizedBox(height: spaceLg),
+          choiceLabel(tr('איך משלמים לך?', 'How do players pay you?')),
+          Container(
+            decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(radiusMd), border: Border.all(color: borderColor)),
+            child: Column(children: [
+              Semantics(identifier: 'court_settings_pay_cash', container: true, child: SwitchListTile(
+                value: _payCash,
+                activeColor: accentGreen,
+                onChanged: (v) => setState(() => _payCash = v),
+                secondary: Icon(Icons.payments_outlined, color: accentGreen),
+                title: Text(tr('מזומן במגרש', 'Cash at the court'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+              )),
+              Divider(height: 1, color: borderColor),
+              Semantics(identifier: 'court_settings_pay_paybox', container: true, child: SwitchListTile(
+                value: _payPaybox,
+                activeColor: accentGreen,
+                onChanged: (v) => setState(() => _payPaybox = v),
+                secondary: Icon(Icons.phone_iphone, color: const Color(0xFF00A3E0)),
+                title: Text('PayBox', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+                subtitle: Text(tr('השחקן משלם מראש בקישור שלך', 'The player pays ahead with your link'),
+                  style: TextStyle(color: textSecondary, fontSize: 12)),
+              )),
+              if (_payPaybox)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(spaceSm, 0, spaceSm, spaceSm),
+                  child: appTextField(
+                    controller: _payboxCtrl,
+                    label: tr('קישור התשלום שלך מ-PayBox', 'Your PayBox payment link'),
+                    icon: Icons.link,
+                    keyboardType: TextInputType.url,
+                    identifier: 'court_settings_paybox_link',
+                  ),
+                ),
+            ]),
+          ),
+          const SizedBox(height: 4),
+          Text(tr('רק מי שמזמין משלם על כל ההזמנה. חברים שמצטרפים מתחשבנים איתו, לא איתך. כשהכסף אצלך, סמן "שולם" בהזמנה.',
+                  'Only the person who books pays, for the whole booking. Friends who join settle with them, not you. When you have the money, mark the booking "paid".'),
+            style: TextStyle(color: textSecondary, fontSize: 12, height: 1.4)),
           const SizedBox(height: spaceLg),
           choiceLabel(tr('כמה שחקנים בהזמנה אחת?', 'How many players per booking?')),
           Semantics(identifier: 'court_settings_players', container: true, child: Container(
@@ -5386,7 +5464,11 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
                   ].join(' · '), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
                 ]),
               ),
-              Text('₪${bookingAmount(b)}', style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900)),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text('₪${bookingAmount(b)}', style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 4),
+                _payChip(d),
+              ]),
             ]),
             const SizedBox(height: spaceSm),
             Row(children: [
@@ -5405,6 +5487,55 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
                 () => showBookingDetails(context, b, isAdmin: true, docId: d.id))),
             ]),
           ]),
+        ),
+      ),
+    );
+  }
+
+  /// "Not paid" / "Paid ✓"; a tap switches it (after asking).
+  Widget _payChip(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final b = d.data();
+    final paid = bookingPaid(b);
+    final method = b['payMethod'] as String?;
+    final color = paid ? accentGreen : colorWarning;
+    return Semantics(
+      identifier: 'admin_pay_${d.id}',
+      button: true,
+      container: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(radiusSm),
+        onTap: () async {
+          final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+            backgroundColor: cardColor,
+            title: Text(paid ? tr('לבטל את הסימון "שולם"?', 'Undo "paid"?') : tr('לסמן ששולם?', 'Mark as paid?'),
+              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+            content: Text('${b['userName'] ?? ''} · ${b['date']} ${b['time']} · ₪${bookingAmount(b)}'
+                '${method != null ? ' · ${payMethodLabel(method)}' : ''}',
+              style: TextStyle(color: textSecondary)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+              TextButton(onPressed: () => Navigator.pop(ctx, true),
+                child: Text(paid ? tr('בטל סימון', 'Undo') : tr('שולם ✓', 'Paid ✓'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900))),
+            ],
+          ));
+          if (ok != true) return;
+          try {
+            await d.reference.update(paid
+                ? {'paymentStatus': 'unpaid', 'paidAt': FieldValue.delete()}
+                : {'paymentStatus': 'paid', 'paidAt': DateTime.now().toIso8601String()});
+          } catch (e) {
+            if (mounted) showAppError(context, e);
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusSm),
+            border: Border.all(color: color.withValues(alpha: 0.4))),
+          child: Text(
+            paid ? tr('שולם ✓', 'Paid ✓')
+                 : method == 'paybox' ? tr('לא שולם · PayBox', 'Unpaid · PayBox')
+                 : tr('לא שולם', 'Unpaid'),
+            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
         ),
       ),
     );
@@ -7653,6 +7784,8 @@ class _BookingScreenState extends State<BookingScreen> {
   Map<String, dynamic>? _selectedType;
   // Tennis only: singles (2 players) or doubles (4). Ignored for other sports.
   bool _tennisDoubles = false;
+  /// How the booker will pay ('cash' / 'paybox'), from the court's methods.
+  String? _payMethod;
 
   String get _sport => sportOf(widget.stadium);
 
@@ -7883,6 +8016,8 @@ class _BookingScreenState extends State<BookingScreen> {
     if (await _alreadyBookedThatDay() || !mounted) return;
     final slot = _visibleSlots[_selSlot!];
     final label = _slotLabel(slot);
+    final payMethods = courtPayMethods(widget.stadium);
+    _payMethod = payMethods.isEmpty ? null : (payMethods.contains(_payMethod) ? _payMethod : payMethods.first);
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -8001,6 +8136,42 @@ class _BookingScreenState extends State<BookingScreen> {
                         style: TextStyle(color: accentGreen, fontSize: 18, fontWeight: FontWeight.w900),
                       ),
                     ]),
+                    if (payMethods.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(tr('איך תשלם?', 'How will you pay?'),
+                        style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 6),
+                      StatefulBuilder(builder: (ctx3, setPay) => Row(children: [
+                        for (final m in payMethods) ...[
+                          if (m != payMethods.first) const SizedBox(width: 8),
+                          Expanded(child: Semantics(
+                            identifier: 'booking_pay_$m',
+                            button: true,
+                            selected: _payMethod == m,
+                            container: true,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(radiusMd),
+                              onTap: () { _payMethod = m; setPay(() {}); },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: _payMethod == m ? accentGreen.withValues(alpha: 0.15) : bgColor,
+                                  borderRadius: BorderRadius.circular(radiusMd),
+                                  border: Border.all(color: _payMethod == m ? accentGreen : borderColor, width: _payMethod == m ? 2 : 1),
+                                ),
+                                child: Text(payMethodLabel(m), style: TextStyle(
+                                  color: _payMethod == m ? accentGreen : textPrimary, fontSize: 13, fontWeight: FontWeight.w800)),
+                              ),
+                            ),
+                          )),
+                        ],
+                      ])),
+                      const SizedBox(height: 6),
+                      Text(tr('אתה משלם על כל ההזמנה. חברים שמצטרפים מתחשבנים איתך.',
+                              'You pay for the whole booking. Friends who join settle with you.'),
+                        style: TextStyle(color: textTertiary, fontSize: 11)),
+                    ],
                   ]),
                 ),
                 const SizedBox(height: spaceLg),
@@ -8138,6 +8309,7 @@ class _BookingScreenState extends State<BookingScreen> {
       'priceAmount': typePrice,
       'durationMinutes': durationMins,
       'bookingCode': code,
+      if (_payMethod != null) ...{'payMethod': _payMethod, 'paymentStatus': 'unpaid'},
       'players': [myName],
       'playerIds': [if (user != null) user.uid],
       'createdAt': DateTime.now().toIso8601String(),
@@ -8202,6 +8374,23 @@ class _BookingScreenState extends State<BookingScreen> {
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
           child: Column(children: [Text(widget.stadium['name'], style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold)), Text('${_days[_selDay]['name']} $date • $label', style: TextStyle(color: textSecondary, fontSize: 13))])),
+        if (_payMethod == 'paybox') ...[
+          const SizedBox(height: 14),
+          Semantics(identifier: 'booking_pay_now', button: true, container: true, child: SizedBox(
+            width: double.infinity, height: 50,
+            child: ElevatedButton.icon(
+              onPressed: () => openPaybox(dialogContext, widget.stadium),
+              icon: const Icon(Icons.phone_iphone, size: 20),
+              label: Text(tr('שלם ₪$typePrice ב-PayBox', 'Pay ₪$typePrice with PayBox'), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            ),
+          )),
+        ] else if (_payMethod == 'cash') ...[
+          const SizedBox(height: 12),
+          Text(tr('התשלום: ₪$typePrice במזומן במגרש', 'Payment: ₪$typePrice cash at the court'),
+            style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+        ],
         const SizedBox(height: 20),
         BookingSharePanel(bookingId: slotKey, code: code, summary: '${widget.stadium['name']} • ${_days[_selDay]['name']} $date • $label'),
       ]),
@@ -9639,6 +9828,25 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             const SizedBox(height: 4),
             Text(b['price']??'', style: TextStyle(color: isPast ? textSecondary : accentGreen, fontSize: 13, fontWeight: FontWeight.bold)),
             if (players.isNotEmpty) ...[const SizedBox(height:8),Text('${tr('שחקנים','Players')}: ${players.length}/${b['maxPlayers'] ?? 15}', style: TextStyle(color: textSecondary, fontSize: 12))],
+            if (isOrg && b['payMethod'] != null) ...[
+              const SizedBox(height: 8),
+              if (bookingPaid(b))
+                Text(tr('שולם ✓', 'Paid ✓'), style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w900))
+              else if (b['payMethod'] == 'paybox' && !isPast)
+                Semantics(identifier: 'my_booking_pay_${doc.id}', button: true, container: true, child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => openPaybox(context, stadiumById((b['stadiumId'] as String?) ?? '')),
+                    icon: const Icon(Icons.phone_iphone, size: 18),
+                    label: Text(tr('שלם ב-PayBox', 'Pay with PayBox'), style: const TextStyle(fontWeight: FontWeight.w900)),
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                  ),
+                ))
+              else
+                Text(tr('לתשלום: ${payMethodLabel(b['payMethod'] as String?)}', 'To pay: ${payMethodLabel(b['payMethod'] as String?)}'),
+                  style: TextStyle(color: colorWarning, fontSize: 12, fontWeight: FontWeight.w800)),
+            ],
             if (!isPast) ...[
               const SizedBox(height: 12),
               if (isOrg) SizedBox(width: double.infinity, child: TextButton(onPressed: canCancel?() async {
