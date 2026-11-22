@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
-import 'package:excel/excel.dart' hide Border;
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -18,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'israel_cities.dart';
+import 'excel_report.dart';
 import 'export_stub.dart' if (dart.library.html) 'export_web.dart';
 
 // ==================== LANGUAGE ====================
@@ -92,8 +92,8 @@ String payboxLinkOf(Map<String, dynamic>? court) => ((court?['payboxLink'] as St
 
 String payMethodLabel(String? m) => m == 'paybox' ? 'PayBox' : tr('מזומן במגרש', 'Cash at the court');
 
-/// A booking counts as paid only when the court admin marked it.
-bool bookingPaid(Map<String, dynamic> b) => b['paymentStatus'] == 'paid';
+/// Paid in full, as the court admin recorded it.
+bool bookingPaid(Map<String, dynamic> b) => bookingPayState(b) == 'paid';
 
 /// Opens the court's PayBox link (the one the admin pasted from the app).
 Future<void> openPaybox(BuildContext context, Map<String, dynamic>? court) {
@@ -1975,155 +1975,22 @@ Widget appLoading({String? message}) {
 }
 
 // ==================== EXCEL EXPORT ====================
+/// Downloads the bookings as a tidy Excel report (see excel_report.dart).
 Future<void> exportToCSV(BuildContext context, List<Map<String,dynamic>> bookings, String filename) async {
-  final ex = Excel.createExcel();
-  final sheet = ex['הזמנות'];
-  ex.delete('Sheet1');
-
-  // ----- Column widths (per Excel "characters" unit) -----
-  // Set BEFORE writing rows so the file's columnInfo block is consistent.
-  sheet.setColumnWidth(0, 20); // Name
-  sheet.setColumnWidth(1, 15); // Phone
-  sheet.setColumnWidth(2, 15); // Stadium
-  sheet.setColumnWidth(3, 8);  // Day
-  sheet.setColumnWidth(4, 12); // Date
-  sheet.setColumnWidth(5, 15); // Time
-  sheet.setColumnWidth(6, 10); // Price
-  sheet.setColumnWidth(7, 8);  // Code
-  sheet.setColumnWidth(8, 8);  // Count
-  sheet.setColumnWidth(9, 30); // Players
-
-  // ----- Header styles (excel ^4.0.6 wants hex WITHOUT a leading '#') -----
-  final headerStyle = CellStyle(
-    bold: true,
-    fontSize: 12,
-    fontColorHex: ExcelColor.fromHexString('FFFFFF'),
-    backgroundColorHex: ExcelColor.fromHexString('00C853'),
-    horizontalAlign: HorizontalAlign.Center,
-    verticalAlign: VerticalAlign.Center,
-  );
-
-  final headers = [
-    tr('שם מארגן',     'Organizer'),
-    tr('טלפון',        'Phone'),
-    tr('מגרש',         'Stadium'),
-    tr('יום',          'Day'),
-    tr('תאריך',        'Date'),
-    tr('שעה',          'Time'),
-    tr('מחיר',         'Price'),
-    tr('קוד',          'Code'),
-    tr('שחקנים',       'Count'),
-    tr('שמות שחקנים', 'Players'),
-  ];
-  sheet.appendRow(headers.map((h) => TextCellValue(h)).toList());
-  for (var c = 0; c < headers.length; c++) {
-    sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: 0)).cellStyle = headerStyle;
-  }
-
-  // ----- Helpers -----
-  int parsePriceInt(String? raw) =>
-      int.tryParse((raw ?? '').split('/').first.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-
-  DateTime? parseDate(Map<String, dynamic> b) {
-    try {
-      final d = (b['date'] as String).split('/');
-      final t = (b['time'] as String? ?? '').split(' - ').first.trim().split(':');
-      final now = DateTime.now();
-      return DateTime(now.year, int.parse(d[1]), int.parse(d[0]),
-        int.parse(t[0]), t.length > 1 ? int.parse(t[1]) : 0);
-    } catch (_) { return null; }
-  }
-
-  final sorted = [...bookings];
-  sorted.sort((a, b) {
-    final da = parseDate(a);
-    final db = parseDate(b);
-    if (da == null && db == null) return 0;
-    if (da == null) return 1;
-    if (db == null) return -1;
-    return da.compareTo(db);
-  });
-
-  // ----- Data styles -----
-  final dataStyle = CellStyle(
-    fontSize: 11,
-    horizontalAlign: HorizontalAlign.Center,
-    verticalAlign: VerticalAlign.Center,
-  );
-  final priceStyle = CellStyle(
-    fontSize: 11,
-    bold: true,
-    fontColorHex: ExcelColor.fromHexString('0A7D2C'),
-    horizontalAlign: HorizontalAlign.Center,
-    verticalAlign: VerticalAlign.Center,
-  );
-
-  int totalRevenue = 0;
-  int totalPlayers = 0;
-  for (var i = 0; i < sorted.length; i++) {
-    final b = sorted[i];
-    final players = (b['players'] as List?) ?? [];
-    final price = parsePriceInt(b['price'] as String?);
-    totalRevenue += price;
-    totalPlayers += players.length;
-
-    sheet.appendRow(<CellValue>[
-      TextCellValue((b['userName']    ?? '').toString()),
-      TextCellValue((b['phone']       ?? '').toString()),
-      TextCellValue((b['stadiumName'] ?? '').toString()),
-      TextCellValue((b['day']         ?? '').toString()),
-      TextCellValue((b['date']        ?? '').toString()),
-      TextCellValue((b['time']        ?? '').toString()),
-      IntCellValue(price),
-      TextCellValue((b['bookingCode'] ?? '').toString()),
-      IntCellValue(players.length),
-      TextCellValue(players.join(', ')),
-    ]);
-    final rowIdx = i + 1;
-    for (var c = 0; c < headers.length; c++) {
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: rowIdx)).cellStyle =
-          c == 6 ? priceStyle : dataStyle;
-    }
-  }
-
-  // ----- Empty separator + total row -----
-  if (sorted.isNotEmpty) {
-    final totalRowIdx = sorted.length + 2;
-    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: totalRowIdx))
-      .value = TextCellValue(tr('סה"כ', 'TOTAL'));
-    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: totalRowIdx))
-      .value = IntCellValue(totalRevenue);
-    sheet.cell(CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: totalRowIdx))
-      .value = IntCellValue(totalPlayers);
-
-    final totalStyle = CellStyle(
-      bold: true,
-      fontSize: 12,
-      fontColorHex: ExcelColor.fromHexString('FFFFFF'),
-      backgroundColorHex: ExcelColor.fromHexString('1A1A1A'),
-      horizontalAlign: HorizontalAlign.Center,
-      verticalAlign: VerticalAlign.Center,
-    );
-    for (var c = 0; c < headers.length; c++) {
-      sheet.cell(CellIndex.indexByColumnRow(columnIndex: c, rowIndex: totalRowIdx)).cellStyle = totalStyle;
-    }
-  }
-
-  // ----- Save -----
-  final bytes = ex.save();
+  final bytes = buildBookingsReport(bookings, hebrew: isHebrew);
   if (bytes == null) return;
   final path = await saveExcelFile(bytes, '$filename.xlsx');
-  if (context.mounted) {
-    final ok = path.isNotEmpty;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? tr('הקובץ הורד! 📊  ${sorted.length} ${tr('הזמנות', 'bookings')} • ₪$totalRevenue',
-                'File downloaded! 📊  ${sorted.length} bookings • ₪$totalRevenue')
-          : tr('שגיאה בשמירה', 'Save failed')),
-      backgroundColor: ok ? accentGreen : Colors.red,
-      duration: const Duration(seconds: 3),
-    ));
-  }
+  if (!context.mounted) return;
+  final total = bookings.fold<int>(0, (s, b) => s + reportAmount(b));
+  final owed = bookings.fold<int>(0, (s, b) => s + bookingMissingAmount(b));
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text(path.isNotEmpty
+        ? tr('הקובץ הורד 📊  ${bookings.length} הזמנות · ₪$total${owed > 0 ? ' · חסר ₪$owed' : ''}',
+             'File downloaded 📊  ${bookings.length} bookings · ₪$total${owed > 0 ? ' · ₪$owed owed' : ''}')
+        : tr('שגיאה בשמירה', 'Save failed')),
+    backgroundColor: path.isNotEmpty ? accentGreen : Colors.red,
+    duration: const Duration(seconds: 3),
+  ));
 }
 
 // ==================== FETCH PHONE ====================
@@ -2403,6 +2270,7 @@ Future<void> showManualBookingDialog(BuildContext context, String stadiumName, S
                   'price': courtHasOwnHours(court) ? _priceLabel(typePrice as int, slotMins) : '₪$typePrice/2hr', 'bookingCode': code,
                   if (courtHasOwnHours(court)) 'durationMinutes': slotMins,
                   'maxPlayers': courtMaxPlayers(court),
+                  'payMethod': 'cash', 'paymentStatus': 'unpaid',
                   if (isRacketSport(courtSport)) 'sport': courtSport,
                   if (court?['isDemo'] == true) 'isDemo': true,
                   'players': [nameCtrl.text.trim()],
@@ -4256,7 +4124,9 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
         ),
         title: Text(title, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
         subtitle: Text(
-          '${docs.length} ${tr('הזמנות', 'bookings')}  ·  ₪$rev  ·  $subtitle',
+          '${docs.length} ${tr('הזמנות', 'bookings')}  ·  ₪$rev'
+          '${docs.fold<int>(0, (s, d) => s + bookingMissingAmount(d.data())) > 0 ? '  ·  ${tr('חסר', 'owed')} ₪${docs.fold<int>(0, (s, d) => s + bookingMissingAmount(d.data()))}' : ''}'
+          '  ·  $subtitle',
           style: TextStyle(color: docs.isEmpty ? textSecondary : color.withValues(alpha: 0.8), fontSize: 11),
         ),
         trailing: docs.isEmpty
@@ -4380,6 +4250,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 _chip('$customPlayers', tr('שחקנים', 'players'), Colors.blue),
                 const SizedBox(width: 6),
                 _chip('₪$customRev', tr('הכנסות', 'revenue'), accentGreen),
+                const SizedBox(width: 6),
+                _chip('₪${customDocs.fold<int>(0, (s, d) => s + bookingMissingAmount(d.data()))}', tr('חסר', 'owed'), colorError),
                 const Spacer(),
                 ElevatedButton.icon(
                   onPressed: customDocs.isEmpty ? null : () => exportToCSV(context, customDocs.map((d) => d.data()).toList(),
@@ -4420,7 +4292,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   decoration: BoxDecoration(color: accentGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
                   child: Center(child: Text('$mNum', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 13)))),
                 title: Text(mLabel, style: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
-                subtitle: Text('${mDocs.length} ${tr('הזמנות', 'bookings')}  ·  $mPlayers ${tr('שחקנים', 'players')}',
+                subtitle: Text('${mDocs.length} ${tr('הזמנות', 'bookings')}  ·  $mPlayers ${tr('שחקנים', 'players')}'
+                  '${mDocs.fold<int>(0, (s, d) => s + bookingMissingAmount(d.data())) > 0 ? '  ·  ${tr('חסר', 'owed')} ₪${mDocs.fold<int>(0, (s, d) => s + bookingMissingAmount(d.data()))}' : ''}',
                   style: TextStyle(color: textSecondary, fontSize: 11)),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text('₪$mRev', style: TextStyle(color: accentGreen, fontWeight: FontWeight.bold, fontSize: 14)),
@@ -5660,6 +5533,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
                     style: TextStyle(color: textPrimary, fontSize: 16, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 2),
                   Text([
+                    if ((b['bookingCode'] ?? '').toString().isNotEmpty) '#${b['bookingCode']}',
                     if (phone.isNotEmpty) phone,
                     players == 1 ? tr('שחקן אחד', '1 player') : tr('$players שחקנים', '$players players'),
                     if (manual) tr('נרשם ידנית', 'added by you'),
@@ -5695,53 +5569,113 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
     );
   }
 
-  /// "Not paid" / "Paid ✓"; a tap switches it (after asking).
+  /// Payment status of a booking; a tap records how much came in.
   Widget _payChip(QueryDocumentSnapshot<Map<String, dynamic>> d) {
     final b = d.data();
-    final paid = bookingPaid(b);
+    final state = bookingPayState(b);
+    final amount = bookingAmount(b);
+    final paid = bookingPaidAmount(b);
     final method = b['payMethod'] as String?;
-    final color = paid ? accentGreen : colorWarning;
+    final color = state == 'paid' ? accentGreen : state == 'partial' ? colorWarning : colorError;
+    final label = state == 'paid'
+        ? (paid > amount ? tr('שולם (+₪${paid - amount})', 'Paid (+₪${paid - amount})') : tr('שולם ✓', 'Paid ✓'))
+        : state == 'partial'
+            ? tr('חסר ₪${bookingMissingAmount(b)}', '₪${bookingMissingAmount(b)} owed')
+            : method == 'paybox' ? tr('לא שולם · PayBox', 'Unpaid · PayBox') : tr('לא שולם', 'Unpaid');
     return Semantics(
       identifier: 'admin_pay_${d.id}',
       button: true,
       container: true,
       child: InkWell(
         borderRadius: BorderRadius.circular(radiusSm),
-        onTap: () async {
-          final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-            backgroundColor: cardColor,
-            title: Text(paid ? tr('לבטל את הסימון "שולם"?', 'Undo "paid"?') : tr('לסמן ששולם?', 'Mark as paid?'),
-              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
-            content: Text('${b['userName'] ?? ''} · ${b['date']} ${b['time']} · ₪${bookingAmount(b)}'
-                '${method != null ? ' · ${payMethodLabel(method)}' : ''}',
-              style: TextStyle(color: textSecondary)),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
-              TextButton(onPressed: () => Navigator.pop(ctx, true),
-                child: Text(paid ? tr('בטל סימון', 'Undo') : tr('שולם ✓', 'Paid ✓'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900))),
-            ],
-          ));
-          if (ok != true) return;
-          try {
-            await d.reference.update(paid
-                ? {'paymentStatus': 'unpaid', 'paidAt': FieldValue.delete()}
-                : {'paymentStatus': 'paid', 'paidAt': DateTime.now().toIso8601String()});
-          } catch (e) {
-            if (mounted) showAppError(context, e);
-          }
-        },
+        onTap: () => _recordPayment(d),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(radiusSm),
             border: Border.all(color: color.withValues(alpha: 0.4))),
-          child: Text(
-            paid ? tr('שולם ✓', 'Paid ✓')
-                 : method == 'paybox' ? tr('לא שולם · PayBox', 'Unpaid · PayBox')
-                 : tr('לא שולם', 'Unpaid'),
-            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
+          child: Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
         ),
       ),
     );
+  }
+
+  /// "How much came in?": the amount (full price filled in), cash or
+  /// PayBox, and what's still owed or paid extra.
+  Future<void> _recordPayment(QueryDocumentSnapshot<Map<String, dynamic>> d) async {
+    final b = d.data();
+    final amount = bookingAmount(b);
+    final state = bookingPayState(b);
+    final ctrl = TextEditingController(text: '${state == 'unpaid' || state == 'none' ? amount : bookingPaidAmount(b)}');
+    var method = (b['paidBy'] as String?) ?? (b['payMethod'] as String?) ?? 'cash';
+    final result = await showDialog<int>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+      final got = int.tryParse(ctrl.text.trim()) ?? 0;
+      final diff = got - amount;
+      final note = got <= 0
+          ? (tr('לא התקבל כסף', 'Nothing received'), colorError)
+          : diff == 0 ? (tr('שולם במלואו ✓', 'Paid in full ✓'), accentGreen)
+          : diff < 0 ? (tr('חסר ₪${-diff}', '₪${-diff} still owed'), colorWarning)
+          : (tr('שולם ₪$diff יותר מהמחיר', '₪$diff more than the price'), colorInfo);
+      Widget methodBtn(String m, String text) => Expanded(child: InkWell(
+        borderRadius: BorderRadius.circular(radiusMd),
+        onTap: () => setD(() => method = m),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: method == m ? accentGreen.withValues(alpha: 0.15) : bgColor,
+            borderRadius: BorderRadius.circular(radiusMd),
+            border: Border.all(color: method == m ? accentGreen : borderColor, width: method == m ? 2 : 1),
+          ),
+          child: Text(text, style: TextStyle(color: method == m ? accentGreen : textPrimary, fontWeight: FontWeight.w800)),
+        ),
+      ));
+      return AlertDialog(
+        backgroundColor: cardColor,
+        title: Semantics(identifier: 'record_payment_dialog', container: true,
+          child: Text(tr('כמה התקבל?', 'How much came in?'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900))),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text('#${b['bookingCode'] ?? ''} · ${b['userName'] ?? ''} · ${b['date']} ${b['time']}',
+            style: TextStyle(color: textSecondary, fontSize: 13)),
+          const SizedBox(height: 4),
+          Text(tr('מחיר ההזמנה: ₪$amount', 'Booking price: ₪$amount'),
+            style: TextStyle(color: textPrimary, fontSize: 15, fontWeight: FontWeight.w900)),
+          const SizedBox(height: spaceSm),
+          Semantics(identifier: 'record_payment_amount', container: true, child: TextField(
+            controller: ctrl,
+            keyboardType: TextInputType.number,
+            autofocus: true,
+            onChanged: (_) => setD(() {}),
+            style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
+            decoration: InputDecoration(prefixText: '₪ ', labelText: tr('סכום שהתקבל', 'Amount received'),
+              labelStyle: TextStyle(color: textSecondary)),
+          )),
+          const SizedBox(height: 6),
+          Text(note.$1, style: TextStyle(color: note.$2, fontWeight: FontWeight.w800)),
+          const SizedBox(height: spaceSm),
+          Row(children: [methodBtn('cash', tr('מזומן', 'Cash')), const SizedBox(width: 8), methodBtn('paybox', 'PayBox')]),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+          TextButton(onPressed: () => Navigator.pop(ctx, 0), child: Text(tr('לא שולם', 'Unpaid'), style: TextStyle(color: colorError))),
+          Semantics(identifier: 'record_payment_save', button: true, container: true, child: TextButton(
+            onPressed: () => Navigator.pop(ctx, got < 0 ? 0 : got),
+            child: Text(tr('שמור', 'Save'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w900)))),
+        ],
+      );
+    }));
+    ctrl.dispose();
+    if (result == null) return;
+    final status = result <= 0 ? 'unpaid' : result >= amount ? 'paid' : 'partial';
+    try {
+      await d.reference.update({
+        'paidAmount': result,
+        'paymentStatus': status,
+        'paidBy': method,
+        'paidAt': result > 0 ? DateTime.now().toIso8601String() : FieldValue.delete(),
+      });
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    }
   }
 
   Widget _pendingBanner(String id) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -5790,27 +5724,32 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', isEqualTo: name).snapshots(),
       builder: (ctx, snap) {
-        // From today on, with the start time read once.
-        final upcoming = <(QueryDocumentSnapshot<Map<String, dynamic>>, DateTime)>[];
+        // Every booking with its start time read once; most views start today.
+        final all = <(QueryDocumentSnapshot<Map<String, dynamic>>, DateTime)>[];
         for (final d in snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
           final start = bookingStart(d.data());
-          if (start != null && !_day(start).isBefore(today)) upcoming.add((d, start));
+          if (start != null) all.add((d, start));
         }
-        upcoming.sort((a, b) => a.$2.compareTo(b.$2));
+        all.sort((a, b) => a.$2.compareTo(b.$2));
+        final upcoming = all.where((e) => !_day(e.$2).isBefore(today)).toList();
+        // Still owed, past games included: that's what the admin chases.
+        final owedList = all.where((e) => bookingMissingAmount(e.$1.data()) > 0).toList();
+        final owedTotal = owedList.fold<int>(0, (s, e) => s + bookingMissingAmount(e.$1.data()));
 
         final todayList = upcoming.where((e) => _day(e.$2) == today).toList();
         final todayIncome = todayList.fold<int>(0, (s, e) => s + bookingAmount(e.$1.data()));
         final tomorrowCount = upcoming.where((e) => _day(e.$2) == today.add(const Duration(days: 1))).length;
 
         final q = _search.trim().toLowerCase();
-        final shown = upcoming.where((e) {
-          if (!_inRange(e.$2)) return false;
+        final shown = (_range == 'unpaid' ? owedList : upcoming).where((e) {
+          if (_range != 'unpaid' && !_inRange(e.$2)) return false;
           if (q.isEmpty) return true;
           final b = e.$1.data();
           final digits = q.replaceAll(RegExp(r'[^0-9]'), '');
           final phone = ((b['phone'] as String?) ?? '').replaceAll(RegExp(r'[^0-9]'), '');
           return ((b['userName'] as String?) ?? '').toLowerCase().contains(q)
-              || (digits.isNotEmpty && phone.contains(digits));
+              || (digits.isNotEmpty && phone.contains(digits))
+              || (digits.isNotEmpty && (b['bookingCode'] ?? '').toString() == digits);
         }).toList();
 
         // Group by day, in order.
@@ -5831,6 +5770,30 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
               : tomorrowCount == 1 ? tr('מחר: הזמנה אחת', 'Tomorrow: 1 booking')
               : tr('מחר: $tomorrowCount הזמנות', 'Tomorrow: $tomorrowCount bookings'),
             style: TextStyle(color: textSecondary, fontSize: 13, fontWeight: FontWeight.w700))),
+          if (owedTotal > 0) ...[
+            const SizedBox(height: spaceSm),
+            Semantics(identifier: 'admin_owed_total', button: true, container: true, child: Material(
+              color: colorError.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(radiusLg),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(radiusLg),
+                onTap: () => setState(() { _range = 'unpaid'; _date = null; }),
+                child: Padding(
+                  padding: const EdgeInsets.all(spaceSm),
+                  child: Row(children: [
+                    Icon(Icons.account_balance_wallet_outlined, color: colorError),
+                    const SizedBox(width: spaceSm),
+                    Expanded(child: Text(
+                      owedList.length == 1
+                          ? tr('חסר לגבות ₪$owedTotal · הזמנה אחת', '₪$owedTotal owed · 1 booking')
+                          : tr('חסר לגבות ₪$owedTotal · ${owedList.length} הזמנות', '₪$owedTotal owed · ${owedList.length} bookings'),
+                      style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w800))),
+                    Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: colorError),
+                  ]),
+                ),
+              ),
+            )),
+          ],
           const SizedBox(height: spaceMd),
           _pendingBanner(id),
           appPrimaryButton(
@@ -5879,6 +5842,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
               _chip('today', tr('היום', 'Today')),
               _chip('tomorrow', tr('מחר', 'Tomorrow')),
               _chip('week', tr('7 ימים', '7 days')),
+              _chip('unpaid', tr('לא שולם', 'Unpaid')),
               Semantics(
                 identifier: 'bookings_pick_date',
                 button: true,
@@ -5914,6 +5878,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
                 icon: q.isNotEmpty ? Icons.search_off : Icons.event_busy_outlined,
                 title: q.isNotEmpty
                     ? tr('לא נמצאה הזמנה', 'No booking found')
+                    : _range == 'unpaid' ? tr('אין חובות, הכל שולם 👍', 'Nothing owed 👍')
                     : _range == 'all' ? tr('אין הזמנות קרובות', 'No upcoming bookings') : tr('אין הזמנות בזמן הזה', 'No bookings then'),
                 subtitle: tr('הזמנות חדשות יופיעו כאן לבד', 'New bookings show up here by themselves'),
               ),
@@ -8589,6 +8554,21 @@ class _BookingScreenState extends State<BookingScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             ),
           )),
+          const SizedBox(height: 8),
+          // The code tells the court admin which booking a PayBox payment is for.
+          Row(children: [
+            Expanded(child: Text(tr('חשוב: בהערה בתשלום כתוב $code', 'Important: write $code in the payment note'),
+              style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w800))),
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: code));
+                ScaffoldMessenger.of(dialogContext).showSnackBar(SnackBar(
+                  content: Text(tr('הקוד הועתק', 'Code copied')), backgroundColor: accentGreen, duration: const Duration(seconds: 1)));
+              },
+              icon: Icon(Icons.copy, size: 16, color: accentGreen),
+              label: Text(tr('העתק', 'Copy'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+            ),
+          ]),
         ] else if (_payMethod == 'cash') ...[
           const SizedBox(height: 12),
           Text(tr('התשלום: ₪$typePrice במזומן במגרש', 'Payment: ₪$typePrice cash at the court'),
@@ -10048,19 +10028,35 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
               const SizedBox(height: 8),
               if (bookingPaid(b))
                 Text(tr('שולם ✓', 'Paid ✓'), style: TextStyle(color: accentGreen, fontSize: 13, fontWeight: FontWeight.w900))
+              else ...[
+                if (bookingPayState(b) == 'partial')
+                  Text(tr('שילמת ₪${bookingPaidAmount(b)} · נשאר ₪${bookingMissingAmount(b)}',
+                          'You paid ₪${bookingPaidAmount(b)} · ₪${bookingMissingAmount(b)} left'),
+                    style: TextStyle(color: colorWarning, fontSize: 13, fontWeight: FontWeight.w900)),
+                if (b['payMethod'] == 'paybox')
+                  Padding(padding: const EdgeInsets.only(top: 4), child: Text(
+                    tr('בהערה בתשלום כתוב: ${b['bookingCode'] ?? ''}', 'In the payment note write: ${b['bookingCode'] ?? ''}'),
+                    style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700))),
+              ],
+              if (bookingPaid(b))
+                const SizedBox.shrink()
               else if (b['payMethod'] == 'paybox' && !isPast)
                 Semantics(identifier: 'my_booking_pay_${doc.id}', button: true, container: true, child: SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () => openPaybox(context, stadiumById((b['stadiumId'] as String?) ?? '')),
                     icon: const Icon(Icons.phone_iphone, size: 18),
-                    label: Text(tr('שלם ב-PayBox', 'Pay with PayBox'), style: const TextStyle(fontWeight: FontWeight.w900)),
+                    label: Text(bookingPayState(b) == 'partial'
+                        ? tr('שלם את היתרה ₪${bookingMissingAmount(b)} ב-PayBox', 'Pay the ₪${bookingMissingAmount(b)} left with PayBox')
+                        : tr('שלם ₪${bookingAmount(b)} ב-PayBox', 'Pay ₪${bookingAmount(b)} with PayBox'),
+                      style: const TextStyle(fontWeight: FontWeight.w900)),
                     style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00A3E0), foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                   ),
                 ))
-              else
-                Text(tr('לתשלום: ${payMethodLabel(b['payMethod'] as String?)}', 'To pay: ${payMethodLabel(b['payMethod'] as String?)}'),
+              else if (bookingPayState(b) != 'partial')
+                Text(tr('לתשלום ₪${bookingAmount(b)} · ${payMethodLabel(b['payMethod'] as String?)}',
+                        'To pay ₪${bookingAmount(b)} · ${payMethodLabel(b['payMethod'] as String?)}'),
                   style: TextStyle(color: colorWarning, fontSize: 12, fontWeight: FontWeight.w800)),
             ],
             if (!isPast) ...[
