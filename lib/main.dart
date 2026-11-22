@@ -9176,16 +9176,16 @@ class _BookingScreenState extends State<BookingScreen> {
     button: true,
     container: true,
     child: Material(
-      color: Colors.purple.withValues(alpha: 0.07),
+      color: cardColor,
       borderRadius: BorderRadius.circular(radiusLg),
       child: InkWell(
         onTap: _requestFixedSlot,
         borderRadius: BorderRadius.circular(radiusLg),
         child: Container(
           padding: const EdgeInsets.all(spaceSm),
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: Colors.purple.withValues(alpha: 0.3))),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(radiusLg), border: Border.all(color: borderColor)),
           child: Row(children: [
-            const Icon(Icons.event_repeat, color: Colors.purple, size: 26),
+            Icon(Icons.event_repeat, color: accentGreen, size: 26),
             const SizedBox(width: spaceSm),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(tr('משחקים כל שבוע באותה שעה?', 'Play at the same time every week?'),
@@ -9194,7 +9194,7 @@ class _BookingScreenState extends State<BookingScreen> {
               Text(tr('בקשו שעה קבועה, והמנהל יאשר', 'Ask for a fixed slot and the manager will approve'),
                 style: TextStyle(color: textSecondary, fontSize: 12)),
             ])),
-            Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: Colors.purple),
+            Icon(isHebrew ? Icons.chevron_left : Icons.chevron_right, color: accentGreen),
           ]),
         ),
       ),
