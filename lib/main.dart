@@ -934,6 +934,11 @@ Widget privacyLink(BuildContext context) => Semantics(
   ),
 );
 
+/// A dialog's text field stays on screen while the dialog fades out, so its
+/// controller is disposed only after that ("_dependents.isEmpty" otherwise).
+void disposeAfterDialog(TextEditingController c) =>
+    Future.delayed(const Duration(milliseconds: 800), c.dispose);
+
 class _DeleteCancelled implements Exception {}
 
 /// Firebase deletes an account only right after a sign-in, so the person
@@ -979,7 +984,7 @@ Future<void> _reauthenticateForDelete(BuildContext context, User user) async {
         child: Text(tr('המשך', 'Continue'), style: TextStyle(color: colorError, fontWeight: FontWeight.w900))),
     ],
   ));
-  passCtrl.dispose();
+  disposeAfterDialog(passCtrl);
   if (pass == null || pass.isEmpty) throw _DeleteCancelled();
   await user.reauthenticateWithCredential(EmailAuthProvider.credential(email: email, password: pass));
 }
@@ -1068,7 +1073,7 @@ Future<void> deleteMyAccount(BuildContext context) async {
       ],
     ),
   ));
-  confirmCtrl.dispose();
+  disposeAfterDialog(confirmCtrl);
   if (ok != true || !context.mounted) return;
 
   try {
@@ -5675,7 +5680,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
         ],
       );
     }));
-    ctrl.dispose();
+    disposeAfterDialog(ctrl);
     if (result == null) return;
     final status = result <= 0 ? 'unpaid' : result >= amount ? 'paid' : 'partial';
     try {
