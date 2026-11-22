@@ -14,7 +14,7 @@ Future<String> _textFor(WidgetTester tester, Duration fromNow, {int minutes = 12
 void main() {
   testWidgets('hours, minutes and seconds under a day', (tester) async {
     final t = await _textFor(tester, const Duration(hours: 2, minutes: 14, seconds: 5, milliseconds: 500));
-    expect(t, contains('2:14:05'));
+    expect(t, matches(RegExp(r'2:14:0[45]'))); // a second may pass while building
   });
   testWidgets('days when further off', (tester) async {
     expect(await _textFor(tester, const Duration(days: 3, hours: 2)), anyOf(contains('3'), contains('4')));
