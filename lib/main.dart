@@ -688,43 +688,130 @@ String? trainingNameForSlot(List<Map<String, dynamic>> groups, String stadiumId,
 //   - time field can be either a slot label "HH:mm - HH:mm" (exact match)
 //     or "startTime"/"endTime" pair for time-range overlap checking.
 
-bool recurringBlockForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
-  final wd = _weekdayFromDateString(dateStr);
-  for (final b in blocks) {
-    if ((b['active'] ?? true) != true) continue;
-    if ((b['stadiumId'] ?? '') != stadiumId) continue;
-    if ((b['dayOfWeek'] as int?) != wd) continue;
-    if (fixedSkipDates(b).contains(dateStr)) continue;
-    if ((b['time'] as String?) == slotLabel) return true;
-  }
-  return false;
+/// Days of a fixed block (0=Sun … 6=Sat): the `days` list, or the single
+/// `dayOfWeek` of older blocks.
+List<int> fixedDays(Map<String, dynamic> b) {
+  final d = b['days'];
+  if (d is List && d.isNotEmpty) return d.map((e) => (e as num).toInt()).toList();
+  return [(b['dayOfWeek'] as num?)?.toInt() ?? 0];
 }
+
+/// An end time in minutes; "00:00" as an end is midnight at night.
+int _endMinutes(String hhmm) {
+  final m = _minutesOf(hhmm);
+  return m == 0 ? 24 * 60 : m;
+}
+
+/// Start and end minutes of a fixed block: its from-to hours, or the one
+/// slot of older blocks.
+(int, int)? fixedRange(Map<String, dynamic> b) {
+  try {
+    final st = b['startTime'] as String?;
+    final en = b['endTime'] as String?;
+    if (st != null && en != null) return (_minutesOf(st), _endMinutes(en));
+    final p = ((b['time'] as String?) ?? '').split(' - ');
+    if (p.length < 2) return null;
+    return (_minutesOf(p[0].trim()), _endMinutes(p[1].trim()));
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Whether a slot label ("HH:mm - HH:mm") overlaps a range.
+bool _labelOverlaps(String? label, (int, int) r) {
+  final p = (label ?? '').split(' - ');
+  if (p.length < 2) return false;
+  try {
+    return _minutesOf(p[0].trim()) < r.$2 && _endMinutes(p[1].trim()) > r.$1;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// A "d/M" date as a DateTime (a January date seen in December is next year).
+DateTime _dateOfKey(String dateStr) {
+  final parts = dateStr.split('/');
+  final now = DateTime.now();
+  var d = DateTime(now.year, int.parse(parts[1]), int.parse(parts[0]));
+  if (now.difference(d).inDays > 180) d = DateTime(now.year + 1, d.month, d.day);
+  return d;
+}
+
+/// Last day of a fixed block (`until`, yyyy-MM-dd), or null for no end.
+DateTime? fixedUntil(Map<String, dynamic> b) => DateTime.tryParse((b['until'] as String?) ?? '');
+
+/// Whether the block closes this slot on this date, freed dates aside.
+bool _fixedCovers(Map<String, dynamic> b, String stadiumId, String dateStr, String slotLabel) {
+  if ((b['active'] ?? true) != true) return false;
+  if ((b['stadiumId'] ?? '') != stadiumId) return false;
+  try {
+    if (!fixedDays(b).contains(_weekdayFromDateString(dateStr))) return false;
+    final until = fixedUntil(b);
+    if (until != null && _dateOfKey(dateStr).isAfter(until)) return false;
+  } catch (_) {
+    return false;
+  }
+  final r = fixedRange(b);
+  return r != null && _labelOverlaps(slotLabel, r);
+}
+
+/// The fixed block closing this slot on this date (not freed for it).
+Map<String, dynamic>? fixedBlockForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
+  for (final b in blocks) {
+    if (_fixedCovers(b, stadiumId, dateStr, slotLabel) && !fixedSkipDates(b).contains(dateStr)) return b;
+  }
+  return null;
+}
+
+bool recurringBlockForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) =>
+    fixedBlockForSlot(blocks, stadiumId, dateStr, slotLabel) != null;
 
 String? recurringReasonForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
-  final wd = _weekdayFromDateString(dateStr);
+  final b = fixedBlockForSlot(blocks, stadiumId, dateStr, slotLabel);
+  if (b == null) return null;
+  final r = ((b['reason'] as String?) ?? '').trim();
+  return r.isEmpty ? tr('קבוע', 'FIXED') : r;
+}
+
+String? recurringIdForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) =>
+    fixedBlockForSlot(blocks, stadiumId, dateStr, slotLabel)?['id'] as String?;
+
+/// An active, unexpired fixed block on one of [days] whose hours overlap.
+Map<String, dynamic>? fixedClash(List<Map<String, dynamic>> blocks, List<int> days, int start, int end) {
+  final today = DateTime.now();
   for (final b in blocks) {
     if ((b['active'] ?? true) != true) continue;
-    if ((b['stadiumId'] ?? '') != stadiumId) continue;
-    if ((b['dayOfWeek'] as int?) != wd) continue;
-    if (fixedSkipDates(b).contains(dateStr)) continue;
-    if ((b['time'] as String?) == slotLabel) {
-      return (b['reason'] as String?) ?? tr('קבוע', 'FIXED');
-    }
+    final until = fixedUntil(b);
+    if (until != null && until.isBefore(DateTime(today.year, today.month, today.day))) continue;
+    if (!fixedDays(b).any(days.contains)) continue;
+    final r = fixedRange(b);
+    if (r != null && start < r.$2 && end > r.$1) return b;
   }
   return null;
 }
 
-String? recurringIdForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
-  final wd = _weekdayFromDateString(dateStr);
-  for (final b in blocks) {
-    if ((b['active'] ?? true) != true) continue;
-    if ((b['stadiumId'] ?? '') != stadiumId) continue;
-    if ((b['dayOfWeek'] as int?) != wd) continue;
-    if (fixedSkipDates(b).contains(dateStr)) continue;
-    if ((b['time'] as String?) == slotLabel) return b['id'] as String?;
-  }
-  return null;
+String fixedDaysLabel(Map<String, dynamic> b) {
+  final ds = fixedDays(b)..sort();
+  final names = isHebrew ? trainingDayNames : trainingDayNamesEn;
+  if (ds.length == 1) return isHebrew ? 'כל יום ${names[ds.first]}' : 'Every ${names[ds.first]}';
+  if (ds.length == 7) return tr('כל יום', 'Every day');
+  return isHebrew ? 'ימי ${ds.map((i) => names[i]).join(', ')}' : ds.map((i) => names[i]).join(', ');
 }
+
+String fixedTimeLabel(Map<String, dynamic> b) =>
+    b['startTime'] != null ? '${b['startTime']} - ${b['endTime']}' : ((b['time'] as String?) ?? '');
+
+String fixedKindLabel(String? kind) => switch (kind) {
+      'school' => tr('בית ספר', 'School'),
+      'other' => tr('אחר', 'Other'),
+      _ => tr('קבוצה', 'Group'),
+    };
+
+Color fixedKindColor(String? kind) => switch (kind) {
+      'school' => Colors.blue,
+      'other' => Colors.blueGrey,
+      _ => Colors.purple,
+    };
 
 /// Dates ("d/M") a weekly fixed slot is free this once: the group isn't
 /// coming, so anyone can book it. The week after it is theirs again.
@@ -733,30 +820,26 @@ List<String> fixedSkipDates(Map<String, dynamic> block) =>
 
 String fixedDateKey(DateTime d) => '${d.day}/${d.month}';
 
-/// The fixed slot freed for this date, if any (to show it and take it back).
+/// The fixed block freed for this date, if any (to show it and take it back).
 Map<String, dynamic>? freedFixedForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
-  final wd = _weekdayFromDateString(dateStr);
   for (final b in blocks) {
-    if ((b['active'] ?? true) != true) continue;
-    if ((b['stadiumId'] ?? '') != stadiumId) continue;
-    if ((b['dayOfWeek'] as int?) != wd) continue;
-    if ((b['time'] as String?) == slotLabel && fixedSkipDates(b).contains(dateStr)) return b;
+    if (_fixedCovers(b, stadiumId, dateStr, slotLabel) && fixedSkipDates(b).contains(dateStr)) return b;
   }
   return null;
 }
 
-/// The next [count] dates of a weekly fixed slot; today counts while its
-/// start time is still ahead.
+/// The next [count] dates of a fixed block (up to its last day); today
+/// counts while its start time is still ahead.
 List<DateTime> nextFixedDates(Map<String, dynamic> block, {int count = 6, DateTime? now}) {
   final t = now ?? DateTime.now();
-  final day = (block['dayOfWeek'] as int?) ?? 0;
-  final start = ((block['time'] as String?) ?? '00:00').split(' - ').first.trim();
-  int startMin;
-  try { startMin = _minutesOf(start); } catch (_) { startMin = 0; }
+  final days = fixedDays(block);
+  final startMin = fixedRange(block)?.$1 ?? 0;
+  final until = fixedUntil(block);
   final out = <DateTime>[];
   var d = DateTime(t.year, t.month, t.day);
-  while (out.length < count) {
-    if (d.weekday % 7 == day) {
+  for (var i = 0; i < 400 && out.length < count; i++) {
+    if (until != null && d.isAfter(until)) break;
+    if (days.contains(d.weekday % 7)) {
       final isToday = d.year == t.year && d.month == t.month && d.day == t.day;
       if (!isToday || startMin > t.hour * 60 + t.minute) out.add(d);
     }
@@ -778,8 +861,8 @@ Future<void> showFixedSkipDialog(BuildContext context, String blockId, Map<Strin
       title: Text(tr('לא מגיעים? לפנות את השעה', 'Not coming? Free the slot'),
         style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(tr('בתאריך שתסמן, השעה \u200E${block['time'] ?? ''}\u200F תהיה פנויה וכל אחד יוכל להזמין אותה. בשבוע שאחרי היא חוזרת להיות קבועה.',
-            'On the dates you mark, ${block['time'] ?? ''} is free for anyone to book. The week after, it is fixed again.'),
+        Text(tr('בתאריך שתסמן, השעות \u200E${fixedTimeLabel(block)}\u200F יהיו פנויות וכל אחד יוכל להזמין. בשבוע שאחרי הן חוזרות להיות קבועות.',
+            'On the dates you mark, ${fixedTimeLabel(block)} is free for anyone to book. The week after, it is fixed again.'),
           style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4)),
         const SizedBox(height: 14),
         Wrap(spacing: 8, runSpacing: 8, children: [
@@ -815,7 +898,9 @@ Future<void> showFixedSkipDialog(BuildContext context, String blockId, Map<Strin
     if (takenBack.isNotEmpty) {
       final booked = await FirebaseFirestore.instance.collection('bookings')
           .where('stadiumId', isEqualTo: block['stadiumId']).get();
-      final clash = takenBack.where((dk) => booked.docs.any((b) => b.data()['date'] == dk && b.data()['time'] == block['time'])).toList();
+      final range = fixedRange(block);
+      final clash = takenBack.where((dk) => booked.docs.any((b) => b.data()['date'] == dk
+          && range != null && _labelOverlaps(b.data()['time'] as String?, range))).toList();
       if (clash.isNotEmpty) {
         keep.addAll(clash);
         if (context.mounted) {
@@ -859,7 +944,8 @@ class MyFixedSlotsCard extends StatelessWidget {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('recurring_blocks').where('userId', isEqualTo: uid).snapshots(),
       builder: (ctx, snap) {
-        final mine = (snap.data?.docs ?? const []).where((d) => (d.data()['active'] ?? true) == true).toList();
+        final mine = (snap.data?.docs ?? const []).where((d) =>
+            (d.data()['active'] ?? true) == true && nextFixedDates(d.data(), count: 1).isNotEmpty).toList();
         if (mine.isEmpty) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -875,7 +961,6 @@ class MyFixedSlotsCard extends StatelessWidget {
     final next = nextFixedDates(b, count: 1).first;
     final freed = fixedSkipDates(b).toSet();
     final upcomingFreed = nextFixedDates(b, count: 26).map(fixedDateKey).where(freed.contains).toList();
-    final day = (b['dayOfWeek'] as int?) ?? 0;
     final nextFree = freed.contains(fixedDateKey(next));
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -891,7 +976,7 @@ class MyFixedSlotsCard extends StatelessWidget {
         const SizedBox(height: 6),
         Text((b['stadiumName'] as String?) ?? '', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
         const SizedBox(height: 2),
-        Text('${isHebrew ? 'כל יום ${trainingDayNames[day]}' : 'Every ${trainingDayNamesEn[day]}'} · \u200E${b['time'] ?? ''}',
+        Text('${fixedDaysLabel(b)} · \u200E${fixedTimeLabel(b)}',
           style: TextStyle(color: textSecondary, fontSize: 13)),
         const SizedBox(height: 4),
         Text(nextFree
@@ -4049,213 +4134,223 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
 
   Future<void> _resetDay() async => FirebaseFirestore.instance.collection('admin_schedule').doc(_docId).delete();
 
+  /// "Closed hours every week": a group or school keeps a from-to range on
+  /// one or more days, until a date or with no end.
   Future<void> _showRecurringBlockDialog() async {
-    int? dayOfWeek;            // 0=Sun … 6=Sat (matches _weekdayFromDateString)
-    String? selectedTime;      // "HH:mm - HH:mm"
-    final reasonCtrl = TextEditingController();
-    int weeks = 12;            // 4 / 8 / 12 / -1 (unlimited)
+    final slots = defaultSlotsForStadium(_court);
+    if (slots.isEmpty) return;
+    final starts = [for (final s in slots) s['start']!];
+    final ends = [for (final s in slots) s['end']!];
+    String kind = 'group';
+    final days = <int>{};
+    String from = starts.first;
+    String to = ends.first;
+    DateTime? until;
+    final nameCtrl = TextEditingController();
     bool saving = false;
+    String? error;
+    final dayNames = isHebrew ? trainingDayNames : trainingDayNamesEn;
 
-    final dayNames = isHebrew
-        ? ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת']
-        : ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    List<String> endsAfter(String f) => [for (final e in ends) if (_endMinutes(e) > _minutesOf(f)) e];
+
+    Widget label(String t) => Padding(
+      padding: const EdgeInsets.only(bottom: 6, top: spaceMd),
+      child: Text(t, style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
+    );
+    Widget chip(String id, String text, bool sel, VoidCallback onTap, {Color? color}) {
+      final c = color ?? accentGreen;
+      return Semantics(identifier: id, container: true, button: true, selected: sel, child: ChoiceChip(
+        label: Text(text),
+        selected: sel,
+        showCheckmark: false,
+        onSelected: (_) => onTap(),
+        backgroundColor: bgSecondary,
+        selectedColor: c.withValues(alpha: 0.2),
+        labelStyle: TextStyle(color: sel ? c : textSecondary, fontWeight: sel ? FontWeight.w800 : FontWeight.w500),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusSm), side: BorderSide(color: sel ? c : borderColor)),
+      ));
+    }
+    InputDecoration box() => InputDecoration(
+      filled: true,
+      fillColor: bgSecondary,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
+    );
 
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => Dialog(
-          backgroundColor: cardColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusXl)),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Padding(
-              padding: const EdgeInsets.all(spaceLg),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 64, height: 64,
-                      decoration: BoxDecoration(
-                        color: Colors.purple.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(Icons.event_repeat_outlined, color: Colors.purple, size: 32),
-                    ),
-                  ),
-                  const SizedBox(height: spaceMd),
-                  Text(
-                    tr('הזמנה קבועה שבועית', 'Weekly Recurring Block'),
-                    style: TextStyle(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w900),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: spaceLg),
-                  // Day of week
-                  Text(tr('יום בשבוע', 'Day of Week'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  DropdownButtonFormField<int>(
-                    value: dayOfWeek,
-                    dropdownColor: cardColor,
-                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: bgSecondary,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
-                    ),
-                    items: List.generate(7, (i) => DropdownMenuItem(value: i, child: Text(dayNames[i]))),
-                    onChanged: (v) => setS(() => dayOfWeek = v),
-                  ),
-                  const SizedBox(height: spaceMd),
-                  // Time slot
-                  Text(tr('שעה', 'Time'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  DropdownButtonFormField<String>(
-                    value: selectedTime,
-                    dropdownColor: cardColor,
-                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: bgSecondary,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
-                    ),
-                    items: defaultSlotsForStadium(_court).map((s) {
-                      final label = '${s['start']} - ${s['end']}';
-                      return DropdownMenuItem(value: label, child: Text(label));
-                    }).toList(),
-                    onChanged: (v) => setS(() => selectedTime = v),
-                  ),
-                  const SizedBox(height: spaceMd),
-                  // Reason
-                  Text(tr('סיבה / שם לקוח', 'Reason / Customer'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: reasonCtrl,
-                    style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
-                    decoration: InputDecoration(
-                      hintText: tr('לדוגמה: קבוצת בית ספר', 'e.g. School team'),
-                      hintStyle: TextStyle(color: textTertiary, fontSize: 13),
-                      filled: true,
-                      fillColor: bgSecondary,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: borderColor)),
-                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(radiusMd), borderSide: BorderSide(color: accentGreen, width: 2)),
-                    ),
-                  ),
-                  const SizedBox(height: spaceMd),
-                  // Weeks
-                  Text(tr('כמה שבועות', 'How many weeks'), style: TextStyle(color: textSecondary, fontSize: 12, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final w in [4, 8, 12, -1])
-                        ChoiceChip(
-                          label: Text(w == -1 ? tr('ללא הגבלה', 'Unlimited') : '$w ${tr('שבועות', 'weeks')}'),
-                          selected: weeks == w,
-                          onSelected: (_) => setS(() => weeks = w),
-                          backgroundColor: bgSecondary,
-                          selectedColor: accentGreen.withValues(alpha: 0.2),
-                          labelStyle: TextStyle(
-                            color: weeks == w ? accentGreen : textSecondary,
-                            fontWeight: weeks == w ? FontWeight.w800 : FontWeight.w500,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(radiusSm),
-                            side: BorderSide(color: weeks == w ? accentGreen : borderColor),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: spaceLg),
-                  // Buttons
+        builder: (ctx, setS) {
+          final kindColor = fixedKindColor(kind);
+          return Dialog(
+            backgroundColor: cardColor,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusXl)),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(spaceLg),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: borderColor),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
-                        ),
-                        child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary, fontSize: 14, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
+                    Icon(Icons.event_repeat_outlined, color: kindColor),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(tr('שעות סגורות קבועות', 'Closed hours every week'),
+                      style: TextStyle(color: textPrimary, fontSize: 18, fontWeight: FontWeight.w900))),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text(tr('השעות ייסגרו להזמנה בכל שבוע. קבוצות אימון שפתחת בלשונית "בית ספר" כבר סוגרות את השעות שלהן לבד.',
+                      'These hours are closed to bookings every week. Training groups from the School tab already close their own hours.'),
+                    style: TextStyle(color: textSecondary, fontSize: 12, height: 1.4)),
+                  label(tr('בשביל מי?', 'Who is it for?')),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    for (final k in const ['group', 'school', 'other'])
+                      chip('closed_kind_$k', fixedKindLabel(k), kind == k, () => setS(() => kind = k), color: fixedKindColor(k)),
+                  ]),
+                  label(tr('שם', 'Name')),
+                  Semantics(identifier: 'closed_name', container: true, child: TextField(
+                    controller: nameCtrl,
+                    style: TextStyle(color: textPrimary, fontSize: 14),
+                    decoration: box().copyWith(
+                      hintText: kind == 'school' ? tr('לדוגמה: בית ספר לכדורגל', 'e.g. Football school') : tr('לדוגמה: הקבוצה של אבי', "e.g. Avi's group"),
+                      hintStyle: TextStyle(color: textTertiary, fontSize: 13)),
+                  )),
+                  label(tr('באילו ימים?', 'Which days?')),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (var i = 0; i < 7; i++)
+                      chip('closed_day_$i', dayNames[i], days.contains(i), () => setS(() => days.contains(i) ? days.remove(i) : days.add(i)), color: kindColor),
+                  ]),
+                  label(tr('באילו שעות?', 'Which hours?')),
+                  Row(children: [
+                    Expanded(child: Semantics(identifier: 'closed_from', container: true, child: DropdownButtonFormField<String>(
+                      value: from,
+                      isExpanded: true,
+                      dropdownColor: cardColor,
+                      style: TextStyle(color: textPrimary, fontSize: 14),
+                      decoration: box().copyWith(labelText: tr('משעה', 'From'), labelStyle: TextStyle(color: textSecondary)),
+                      items: [for (final st in starts) DropdownMenuItem(value: st, child: Text(st, textDirection: TextDirection.ltr))],
+                      onChanged: (v) => setS(() {
+                        from = v ?? from;
+                        final ok = endsAfter(from);
+                        if (!ok.contains(to)) to = ok.isNotEmpty ? ok.first : to;
+                      }),
+                    ))),
                     const SizedBox(width: spaceSm),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton.icon(
-                        onPressed: saving ? null : () async {
-                          if (dayOfWeek == null || selectedTime == null) {
-                            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                              content: Text(tr('בחר יום ושעה', 'Pick day and time')),
-                              backgroundColor: colorError,
-                            ));
+                    Expanded(child: Semantics(identifier: 'closed_to', container: true, child: DropdownButtonFormField<String>(
+                      key: ValueKey('to_$from'),
+                      value: endsAfter(from).contains(to) ? to : null,
+                      isExpanded: true,
+                      dropdownColor: cardColor,
+                      style: TextStyle(color: textPrimary, fontSize: 14),
+                      decoration: box().copyWith(labelText: tr('עד שעה', 'To'), labelStyle: TextStyle(color: textSecondary)),
+                      items: [for (final e in endsAfter(from)) DropdownMenuItem(value: e, child: Text(e, textDirection: TextDirection.ltr))],
+                      onChanged: (v) => setS(() => to = v ?? to),
+                    ))),
+                  ]),
+                  label(tr('עד מתי?', 'Until when?')),
+                  Wrap(spacing: 8, runSpacing: 8, children: [
+                    chip('closed_until_none', tr('ללא הגבלה', 'No end'), until == null, () => setS(() => until = null), color: kindColor),
+                    chip('closed_until_date',
+                      until == null ? tr('עד תאריך…', 'Until a date…') : tr('עד ${until!.day}/${until!.month}/${until!.year}', 'Until ${until!.day}/${until!.month}/${until!.year}'),
+                      until != null, () async {
+                        final now = DateTime.now();
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: until ?? now.add(const Duration(days: 90)),
+                          firstDate: now,
+                          lastDate: now.add(const Duration(days: 730)),
+                        );
+                        if (picked != null) setS(() => until = picked);
+                      }, color: kindColor),
+                  ]),
+                  if (error != null) ...[
+                    const SizedBox(height: spaceSm),
+                    Text(error!, style: TextStyle(color: colorError, fontSize: 13, fontWeight: FontWeight.w700)),
+                  ],
+                  const SizedBox(height: spaceLg),
+                  Row(children: [
+                    Expanded(child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: borderColor),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                      ),
+                      child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary, fontWeight: FontWeight.w700)),
+                    )),
+                    const SizedBox(width: spaceSm),
+                    Expanded(flex: 2, child: Semantics(identifier: 'closed_save', container: true, button: true, child: ElevatedButton.icon(
+                      onPressed: saving ? null : () async {
+                        final name = nameCtrl.text.trim();
+                        if (name.isEmpty || days.isEmpty) {
+                          setS(() => error = name.isEmpty ? tr('כתוב שם', 'Write a name') : tr('בחר לפחות יום אחד', 'Pick at least one day'));
+                          return;
+                        }
+                        setS(() { saving = true; error = null; });
+                        try {
+                          final col = FirebaseFirestore.instance.collection('recurring_blocks');
+                          final snap = await col.where('stadiumId', isEqualTo: widget.stadiumId).get();
+                          final sortedDays = days.toList()..sort();
+                          final clash = fixedClash([for (final d in snap.docs) {'id': d.id, ...d.data()}],
+                            sortedDays, _minutesOf(from), _endMinutes(to));
+                          if (clash != null) {
+                            setS(() {
+                              saving = false;
+                              error = tr('חופף ל"${clash['reason'] ?? ''}" (${fixedDaysLabel(clash)} · \u200E${fixedTimeLabel(clash)})',
+                                'Overlaps "${clash['reason'] ?? ''}" (${fixedDaysLabel(clash)} · ${fixedTimeLabel(clash)})');
+                            });
                             return;
                           }
-                          setS(() => saving = true);
-                          try {
-                            await FirebaseFirestore.instance.collection('recurring_blocks').add({
-                              'stadiumId':  widget.stadiumId,
-                              'stadiumName': widget.stadiumName,
-                              'dayOfWeek':  dayOfWeek,
-                              'dayName':    dayNames[dayOfWeek!],
-                              'time':       selectedTime,
-                              'reason':     reasonCtrl.text.trim(),
-                              'weeks':      weeks,
-                              'createdAt':  DateTime.now().toIso8601String(),
-                              'active':     true,
-                            });
-                            if (ctx.mounted) {
-                              Navigator.pop(ctx);
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(tr('הזמנה קבועה נוספה ✓', 'Recurring block added ✓')),
-                                backgroundColor: accentGreen,
-                                duration: const Duration(seconds: 3),
-                              ));
-                            }
-                          } catch (e) {
-                            setS(() => saving = false);
-                            if (ctx.mounted) {
-                              ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                                content: Text(tr('שגיאה בשמירה', 'Error saving')),
-                                backgroundColor: colorError,
-                              ));
-                            }
+                          await col.add({
+                            'stadiumId': widget.stadiumId,
+                            'stadiumName': widget.stadiumName,
+                            'kind': kind,
+                            'reason': name,
+                            'days': sortedDays,
+                            'dayOfWeek': sortedDays.first,
+                            'dayName': trainingDayNames[sortedDays.first],
+                            'startTime': from,
+                            'endTime': to,
+                            'time': '$from - $to',
+                            if (until != null)
+                              'until': '${until!.year}-${until!.month.toString().padLeft(2, '0')}-${until!.day.toString().padLeft(2, '0')}',
+                            'skipDates': <String>[],
+                            'createdAt': DateTime.now().toIso8601String(),
+                            'active': true,
+                          });
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(tr('השעות נסגרו: $name · ${fixedDaysLabel({'days': sortedDays})}', 'Closed: $name · ${fixedDaysLabel({'days': sortedDays})}')),
+                              backgroundColor: accentGreen,
+                            ));
                           }
-                        },
-                        icon: saving
-                            ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: bgColor))
-                            : const Icon(Icons.save_outlined, size: 18),
-                        label: Text(
-                          saving ? tr('שומר...', 'Saving...') : tr('שמור', 'Save'),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: accentGreen,
-                          foregroundColor: bgColor, iconColor: bgColor,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
-                          elevation: 0,
-                        ),
+                        } catch (e) {
+                          setS(() { saving = false; error = tr('שגיאה בשמירה', 'Error saving'); });
+                        }
+                      },
+                      icon: saving
+                          ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: onAccent))
+                          : const Icon(Icons.lock_clock_outlined, size: 18),
+                      label: Text(saving ? tr('שומר...', 'Saving...') : tr('סגור את השעות', 'Close these hours'),
+                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: accentGreen,
+                        foregroundColor: onAccent, iconColor: onAccent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radiusMd)),
+                        elevation: 0,
                       ),
-                    ),
+                    ))),
                   ]),
-                ],
+                ]),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
+    disposeAfterDialog(nameCtrl);
   }
 
   /// A fixed slot in the schedule: free it for this date only, or cancel it.
@@ -4263,7 +4358,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     final date = _days[_selDay]['date']!;
     final choice = await showDialog<String>(context: context, builder: (dctx) => SimpleDialog(
       backgroundColor: cardColor,
-      title: Text(tr('שעה קבועה · \u200E$label', 'Fixed slot · $label'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+      title: Text(tr('שעות קבועות · \u200E$label', 'Fixed hours · $label'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
       children: [
         Semantics(identifier: 'fixed_free_once', container: true, button: true, child: SimpleDialogOption(
           onPressed: () => Navigator.pop(dctx, 'once'),
@@ -4272,7 +4367,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(tr('לפנות רק ב-$date', 'Free only on $date'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
-              Text(tr('הקבוצה לא מגיעה, מישהו אחר יוכל להזמין. בשבוע הבא חוזר לקבוע.', 'The group is not coming; others can book it. Fixed again next week.'),
+              Text(tr('לא מגיעים באותו יום: כל השעות שלהם בתאריך הזה נפתחות להזמנה. בשבוע הבא חוזר לקבוע.', 'Not coming that day: all their hours on this date open for booking. Fixed again next week.'),
                 style: TextStyle(color: textSecondary, fontSize: 12)),
             ])),
           ]),
@@ -4298,7 +4393,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(free ? tr('ב-$date השעה פנויה להזמנה', '$date is free to book') : tr('השעה חזרה להיות קבועה', 'Fixed again')),
+        content: Text(free ? tr('ב-$date השעות פנויות להזמנה', '$date is free to book') : tr('השעות חזרו להיות קבועות', 'Fixed again')),
         backgroundColor: accentGreen,
       ));
     } catch (e) {
@@ -4709,7 +4804,6 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
         return StreamBuilder(
       stream: FirebaseFirestore.instance.collection('training_groups').where('stadiumId', isEqualTo: widget.stadiumId).snapshots(),
       builder: (ctx, trainSnap) {
-        // ignore: unused_local_variable
         final trainingGroups = (trainSnap.data?.docs ?? []).map((d) => {'id': d.id, ...d.data()}).toList();
         return StreamBuilder(
           stream: FirebaseFirestore.instance.collection('bookings').where('stadiumName', isEqualTo: widget.stadiumName).where('date', isEqualTo: _days[_selDay]['date']).snapshots(),
@@ -4788,7 +4882,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 onPressed: () => _showRecurringBlockDialog(),
                 icon: const Icon(Icons.event_repeat_outlined, size: 18, color: Colors.purple),
                 label: Text(
-                  simple ? tr('שעה קבועה כל שבוע', 'Same time every week') : tr('הזמנה קבועה שבועית', 'Weekly Recurring Block'),
+                  tr('שעות סגורות קבועות (קבוצה / בית ספר)', 'Closed hours every week (group / school)'),
                   style: const TextStyle(color: Colors.purple, fontSize: 13, fontWeight: FontWeight.w800),
                 ),
                 style: OutlinedButton.styleFrom(
@@ -4833,14 +4927,19 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               _dot(accentGreen, tr('פנוי','Free')), const SizedBox(width: 12),
               _dot(colorWarning, tr('תפוס','Booked')), const SizedBox(width: 12),
               _dot(Colors.red, tr('חסום','Blocked')), const SizedBox(width: 12),
-              _dot(Colors.purple, tr('קבוע','Fixed')),
+              _dot(Colors.purple, tr('קבוע','Fixed')), const SizedBox(width: 12),
+              _dot(Colors.blue, tr('בית ספר','School')),
             ]),
             const SizedBox(height: 12),
             ...slots.map((slot) {
               final label = _slotLabel(slot);
               final isBooked  = bookedLabels.contains(label);
               final isBlocked = blockedLabels.contains(label);
-              final isFixed   = recurringBlockForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label);
+              final fixedBlock = fixedBlockForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label);
+              final isFixed   = fixedBlock != null;
+              final fixedClr  = fixedKindColor(fixedBlock?['kind'] as String?);
+              final schoolName = (isBooked || isFixed) ? null
+                  : trainingNameForSlot(trainingGroups, widget.stadiumId, _days[_selDay]['date']!, label);
               final fixedReason = isFixed ? recurringReasonForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label) : null;
               final fixedId   = isFixed ? recurringIdForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label) : null;
               final freedFixed = isFixed ? null : freedFixedForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label);
@@ -4850,7 +4949,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               }
               Color bg, border, textClr;
               if (isBooked)        { bg = colorWarning.withValues(alpha: 0.1); border = colorWarning.withValues(alpha: 0.5); textClr = colorWarning; }
-              else if (isFixed)    { bg = Colors.purple.withValues(alpha: 0.1); border = Colors.purple.withValues(alpha: 0.5); textClr = Colors.purple; }
+              else if (isFixed)    { bg = fixedClr.withValues(alpha: 0.1); border = fixedClr.withValues(alpha: 0.5); textClr = fixedClr; }
+              else if (schoolName != null) { bg = Colors.blue.withValues(alpha: 0.08); border = Colors.blue.withValues(alpha: 0.45); textClr = Colors.blue; }
               else if (isBlocked)  { bg = Colors.red.withValues(alpha: 0.08);   border = Colors.red.withValues(alpha: 0.4);    textClr = Colors.red; }
               else                 { bg = cardColor; border = accentGreen.withValues(alpha: 0.3); textClr = textPrimary; }
               return GestureDetector(
@@ -4862,7 +4962,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 child: Row(children: [
                   SizedBox(width: 120, child: Text(label, textDirection: TextDirection.ltr, style: TextStyle(color: textClr, fontWeight: FontWeight.w900, fontSize: 15))),
                   if (isBooked)        _badge(tr('תפוס','BOOKED'), colorWarning)
-                  else if (isFixed)    _badge(fixedReason ?? tr('קבוע', 'FIXED'), Colors.purple)
+                  else if (isFixed)    Flexible(child: _badge('${fixedKindLabel(fixedBlock['kind'] as String?)} · ${fixedReason ?? ''}', fixedClr))
+                  else if (schoolName != null) Flexible(child: _badge('🎓 $schoolName', Colors.blue))
                   else if (isBlocked)  _badge(tr('חסום','BLOCKED'), Colors.red)
                   else if (freedFixed != null) _badge(tr('פנוי · הקבועים לא מגיעים', 'FREE · fixed group off'), accentGreen)
                   else                 _badge(tr('פנוי','FREE'), accentGreen),
@@ -4870,8 +4971,10 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   if (isFixed) ...[
                     Semantics(identifier: 'fixed_options_$label', container: true, button: true, child: TextButton(
                       onPressed: fixedId != null ? () => _fixedSlotMenu(fixedId, label) : null,
-                      child: Text(tr('אפשרויות', 'Options'), style: const TextStyle(color: Colors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
+                      child: Text(tr('אפשרויות', 'Options'), style: TextStyle(color: fixedClr, fontWeight: FontWeight.w800, fontSize: 12)),
                     )),
+                  ] else if (schoolName != null) ...[
+                    Text(tr('אימון', 'Training'), style: const TextStyle(color: Colors.blue, fontSize: 12, fontWeight: FontWeight.w700)),
                   ] else if (!isBooked) ...[
                     if (freedFixed != null)
                       IconButton(
@@ -4936,7 +5039,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
   }
 
   Widget _dot(Color c, String l) => Row(children: [Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle)), const SizedBox(width: 3), Text(l, style: TextStyle(color: textSecondary, fontSize: 10))]);
-  Widget _badge(String t, Color c) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withValues(alpha: 0.4))), child: Text(t, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.w900)));
+  Widget _badge(String t, Color c) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: c.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: c.withValues(alpha: 0.4))), child: Text(t, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.w900)));
 }
 
 // ==================== CONTACT & SHARE HELPERS ====================
@@ -6556,8 +6659,8 @@ class FixedRequestsAdminView extends StatelessWidget {
     try {
       if (approve) {
         final existing = await db.collection('recurring_blocks').where('stadiumId', isEqualTo: r['stadiumId']).get();
-        final clash = existing.docs.any((x) =>
-            (x.data()['active'] ?? true) == true && x.data()['dayOfWeek'] == day && x.data()['time'] == r['time']);
+        final want = fixedRange({'time': r['time']});
+        final clash = want != null && fixedClash([for (final x in existing.docs) x.data()], [day], want.$1, want.$2) != null;
         if (clash) {
           if (context.mounted) _toast(context, tr('השעה הזאת כבר קבועה למישהו אחר', 'This time is already someone else\'s fixed slot'), error: true);
           return;
@@ -6569,6 +6672,7 @@ class FixedRequestsAdminView extends StatelessWidget {
           'dayName': trainingDayNames[day],
           'time': r['time'],
           'reason': ((r['userName'] as String?) ?? '').isEmpty ? tr('קבוע', 'Fixed') : r['userName'],
+          'kind': 'group',
           'weeks': -1,
           'createdAt': DateTime.now().toIso8601String(),
           'active': true,
@@ -6622,6 +6726,10 @@ class FixedRequestsAdminView extends StatelessWidget {
     String dayLabel(Object? d) {
       final i = (d as int?) ?? 0;
       return isHebrew ? 'כל יום ${trainingDayNames[i]}' : 'Every ${trainingDayNamesEn[i]}';
+    }
+    String untilLine(Map<String, dynamic> b) {
+      final u = fixedUntil(b);
+      return u == null ? '' : '\n${tr('עד', 'Until')} ${u.day}/${u.month}/${u.year}';
     }
     String freedLine(Map<String, dynamic> b) {
       final skip = fixedSkipDates(b);
@@ -6694,7 +6802,7 @@ class FixedRequestsAdminView extends StatelessWidget {
         stream: FirebaseFirestore.instance.collection('recurring_blocks').where('stadiumId', isEqualTo: id).snapshots(),
         builder: (ctx, snap) {
           if (!snap.hasData) return appLoading();
-          final fixed = snap.data!.docs.where((d) => (d.data()['active'] ?? true) == true).toList()
+          final fixed = snap.data!.docs.where((d) => (d.data()['active'] ?? true) == true && nextFixedDates(d.data(), count: 1).isNotEmpty).toList()
             ..sort((a, b) {
               final c = ((a.data()['dayOfWeek'] as int?) ?? 0).compareTo((b.data()['dayOfWeek'] as int?) ?? 0);
               return c != 0 ? c : ((a.data()['time'] as String?) ?? '').compareTo((b.data()['time'] as String?) ?? '');
@@ -6712,16 +6820,16 @@ class FixedRequestsAdminView extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: spaceSm, vertical: 6),
                 decoration: BoxDecoration(color: Colors.purple.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(radiusMd), border: Border.all(color: Colors.purple.withValues(alpha: 0.25))),
                 child: Row(children: [
-                  Icon(Icons.event_repeat, color: Colors.purple, size: 20),
+                  Icon(Icons.event_repeat, color: fixedKindColor(d.data()['kind'] as String?), size: 20),
                   const SizedBox(width: spaceXs),
-                  Expanded(child: Text('${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}\n${d.data()['reason'] ?? ''}${freedLine(d.data())}',
+                  Expanded(child: Text('${fixedKindLabel(d.data()['kind'] as String?)} · ${d.data()['reason'] ?? ''}\n${fixedDaysLabel(d.data())} · \u200E${fixedTimeLabel(d.data())}${untilLine(d.data())}${freedLine(d.data())}',
                     style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4))),
                   Semantics(identifier: 'fixed_skip_open_${d.id}', container: true, button: true, child: TextButton(
                     onPressed: () => showFixedSkipDialog(context, d.id, d.data()),
                     child: Text(tr('פנה תאריך', 'Free a date'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
                   )),
                   TextButton(
-                    onPressed: () => _cancelFixed(context, d.id, '${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}'),
+                    onPressed: () => _cancelFixed(context, d.id, '${fixedDaysLabel(d.data())} · ${fixedTimeLabel(d.data())}'),
                     child: Text(tr('בטל', 'Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w800)),
                   ),
                 ]),
