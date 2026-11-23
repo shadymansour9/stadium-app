@@ -23,6 +23,7 @@ void main() {
     });
     test('free text is not a city', () {
       expect(exactCity('kika nazareth'), isNull);
+      expect(exactCity('עשעשעש'), isNull);
       expect(exactCity(''), isNull);
     });
   });
