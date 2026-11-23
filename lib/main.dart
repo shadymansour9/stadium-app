@@ -2780,6 +2780,32 @@ Widget _langButton(BuildContext context) => TextButton(
 );
 
 // ==================== SPLASH ====================
+/// The app's logo (same picture as the launcher icon).
+class AppLogo extends StatelessWidget {
+  final double size;
+  final double radius;
+  final bool glow;
+  const AppLogo({super.key, required this.size, required this.radius, this.glow = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size, height: size,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        boxShadow: glow
+            ? [BoxShadow(color: accentGreen.withValues(alpha: 0.25), blurRadius: 24, offset: const Offset(0, 8))]
+            : null,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: Image.asset('assets/icon/logo.png', width: size, height: size, fit: BoxFit.cover,
+            filterQuality: FilterQuality.medium),
+      ),
+    );
+  }
+}
+
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -2857,7 +2883,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.sports_soccer, color: accentGreen, size: 80),
+              const AppLogo(size: 110, radius: 26),
               const SizedBox(height: 24),
               AnimatedBuilder(
                 animation: _spacingAnim,
@@ -3143,25 +3169,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Center(
-                      child: Container(
-                        width: 72, height: 72,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [accentGreen, accentGreen.withValues(alpha: 0.7)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: accentGreen.withValues(alpha: 0.3),
-                              blurRadius: 24,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: Icon(Icons.stadium_rounded, color: bgColor, size: 36),
-                      ),
+                      child: AppLogo(size: 84, radius: 20, glow: true),
                     ),
                     const SizedBox(height: spaceLg),
                     Text(
@@ -7784,18 +7792,7 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                       Expanded(
                         child: Row(
                           children: [
-                            Container(
-                              width: 40, height: 40,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [accentGreen, accentGreen.withValues(alpha: 0.7)],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Icon(Icons.stadium_rounded, color: bgColor, size: 22),
-                            ),
+                            const AppLogo(size: 40, radius: 11),
                             const SizedBox(width: spaceSm),
                             Expanded(
                               child: Column(
