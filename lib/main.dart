@@ -1169,7 +1169,7 @@ String _errorMessageFor(Object error) {
     switch (error.code) {
       case 'wrong-password':
       case 'invalid-credential':
-        return tr('סיסמה שגויה', 'Wrong password');
+        return tr('אימייל או סיסמה שגויים', 'Wrong email or password');
       case 'user-not-found':
         return tr('משתמש לא נמצא', 'User not found');
       case 'email-already-in-use':
@@ -1935,10 +1935,14 @@ Widget appTextField({
   VoidCallback? onTap,
   bool readOnly = false,
   String? identifier,
+  TextInputAction? textInputAction,
+  ValueChanged<String>? onSubmitted,
 }) {
   final field = TextFormField(
     controller: controller,
     obscureText: obscure,
+    textInputAction: textInputAction,
+    onFieldSubmitted: onSubmitted,
     keyboardType: keyboardType,
     textDirection: obscure || keyboardType == TextInputType.emailAddress || keyboardType == TextInputType.phone
         ? TextDirection.ltr
@@ -2806,6 +2810,34 @@ class AppLogo extends StatelessWidget {
   }
 }
 
+/// Cards one under the other on a phone; two (or three) per row on a
+/// computer, so admin pages use the screen instead of a phone-width strip.
+class AdaptiveGrid extends StatelessWidget {
+  final List<Widget> children;
+  final double minItemWidth;
+  final double gap;
+  const AdaptiveGrid({super.key, required this.children, this.minItemWidth = 460, this.gap = 12});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      final cols = (box.maxWidth / minItemWidth).floor().clamp(1, 3);
+      if (cols == 1 || children.length < 2) {
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
+      }
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        for (var i = 0; i < children.length; i += cols)
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (var j = 0; j < cols; j++) ...[
+              if (j > 0) SizedBox(width: gap),
+              Expanded(child: i + j < children.length ? children[i + j] : const SizedBox()),
+            ],
+          ]),
+      ]);
+    });
+  }
+}
+
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -2966,7 +2998,7 @@ class _LoginScreenState extends State<LoginScreen> {
           SnackBar(
             content: Semantics(
               identifier: 'login_error_message',
-              child: Text(e.message ?? 'Login failed'),
+              child: Text(_errorMessageFor(e)),
             ),
             backgroundColor: colorError,
           ),
@@ -3229,6 +3261,8 @@ class _LoginScreenState extends State<LoginScreen> {
                             keyboardType: TextInputType.emailAddress,
                             validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
                             identifier: 'login_email_field',
+                            // Enter moves on to the password.
+                            textInputAction: TextInputAction.next,
                           ),
                           const SizedBox(height: spaceMd),
                           Semantics(
@@ -3238,6 +3272,9 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _passCtrl,
                               obscureText: _obscurePass,
                               textDirection: TextDirection.ltr,
+                              // Enter = "התחבר".
+                              textInputAction: TextInputAction.go,
+                              onFieldSubmitted: (_) { if (!_loading) _login(); },
                               style: TextStyle(color: textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
                               validator: (v) => (v == null || v.isEmpty) ? tr('שדה חובה', 'Required') : null,
                               decoration: InputDecoration(
@@ -3836,7 +3873,7 @@ class SuperAdminScreen extends StatefulWidget {
   @override State<SuperAdminScreen> createState() => _SuperAdminScreenState();
 }
 /// Widest the admin pages get; wider screens show them centred.
-const double kAdminMaxWidth = 720;
+const double kAdminMaxWidth = 1200;
 
 /// The owner's screen: open clubs and courts, pick their admins, turn the
 /// kids school on. Bookings and reports belong to each court's admin.
@@ -4490,7 +4527,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             style: ElevatedButton.styleFrom(backgroundColor: Colors.green.shade700, foregroundColor: Colors.white, iconColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
           )),
           const SizedBox(height: 12),
-          ...docs.map((d) => _adminBookCard(d.data(), docId: d.id, context: context)),
+          AdaptiveGrid(children: [for (final d in docs) _adminBookCard(d.data(), docId: d.id, context: context)]),
         ]);
       },
     );
@@ -4958,7 +4995,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               _dot(Colors.blue, tr('בית ספר','School')),
             ]),
             const SizedBox(height: 12),
-            ...slots.map((slot) {
+            AdaptiveGrid(minItemWidth: 420, children: slots.map<Widget>((slot) {
               final label = _slotLabel(slot);
               final isBooked  = bookedLabels.contains(label);
               final isBlocked = blockedLabels.contains(label);
@@ -5051,7 +5088,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                 ]),
               ),
               );
-            }),
+            }).toList()),
             const SizedBox(height: 8),
             if (!simple) Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.blue.withValues(alpha: 0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.blue.withValues(alpha: 0.2))),
               child: Row(children: [const Icon(Icons.info_outline, color: Colors.blue, size: 14), const SizedBox(width: 8), Expanded(child: Text('✏️ ${tr('ערוך','Edit')}  🚫 ${tr('חסום/בטל','Block')}  ℹ️ ${tr('לחץ לפרטים + ביטול','Tap for details + cancel')}', style: const TextStyle(color: Colors.blue, fontSize: 11)))])),
@@ -5829,9 +5866,10 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
         title: Semantics(identifier: 'court_settings_screen', container: true,
           child: Text('${tr('הגדרות', 'Settings')} — ${widget.court['name']}', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900))),
       ),
-      body: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Form(key: _formKey, child: ListView(padding: const EdgeInsets.all(spaceMd), children: [
+      // Phone: one column. Computer: two columns side by side.
+      body: LayoutBuilder(builder: (context, box) {
+        final wide = box.maxWidth >= 1000;
+        final colA = <Widget>[
           choiceLabel(tr('טלפון של המגרש', "Court's phone")),
           appTextField(
             controller: _phoneCtrl,
@@ -5931,7 +5969,8 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
           Text(tr('ההזמנה מתמלאת כשמגיעים למספר הזה. ברירת מחדל: פאדל וטניס 4, כדורגל 15.',
                   'A booking is full at this number. Default: padel and tennis 4, football 15.'),
             style: TextStyle(color: textSecondary, fontSize: 12)),
-          const SizedBox(height: spaceLg),
+        ];
+        final colB = <Widget>[
           choiceLabel(tr('שעות פתיחה', 'Opening hours')),
           Row(children: [
             Expanded(child: _timeDropdown(tr('פותחים ב-', 'Opens at'), 'court_settings_open', _open,
@@ -5975,6 +6014,17 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
                 side: BorderSide(color: _amenities.contains(e.key) ? accentGreen : borderColor),
               ),
           ])),
+        ];
+        return Center(child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: wide ? 1100 : 520),
+          child: Form(key: _formKey, child: ListView(padding: const EdgeInsets.all(spaceMd), children: [
+            if (wide)
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: colA)),
+                const SizedBox(width: spaceXl),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: colB)),
+              ])
+            else ...[...colA, const SizedBox(height: spaceLg), ...colB],
           if (_error.isNotEmpty) ...[
             const SizedBox(height: spaceSm),
             Text(_error, style: TextStyle(color: colorError, fontWeight: FontWeight.w700)),
@@ -5992,8 +6042,9 @@ class _CourtSettingsScreenState extends State<CourtSettingsScreen> {
           choiceLabel(tr('תמונות המגרש', 'Court photos')),
           CourtPhotosEditor(courtId: widget.court['id'] as String),
           const SizedBox(height: spaceXl),
-        ])),
-      )),
+          ])),
+        ));
+      }),
     );
   }
 }
@@ -6100,7 +6151,7 @@ class _CourtAdminScreenState extends State<CourtAdminScreen> {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AdminAppBar(title: _title((venue?['name'] as String?) ?? tr('ניהול המגרש', 'MY COURT'))),
-      // On a computer the page stays phone-width in the middle of the screen.
+      // On a computer the page uses the screen (up to kAdminMaxWidth); lists go two per row.
       body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: kAdminMaxWidth), child: Column(children: [
         if (courts.length > 1)
           SizedBox(
@@ -6660,7 +6711,7 @@ class _CourtBookingsViewState extends State<CourtBookingsView> {
             for (final entry in days.entries) ...[
               _dayHeader(entry.key, entry.value.length,
                 entry.value.fold<int>(0, (s, e) => s + bookingAmount(e.$1.data()))),
-              for (final e in entry.value) _bookingTile(e.$1, e.$2),
+              AdaptiveGrid(children: [for (final e in entry.value) _bookingTile(e.$1, e.$2)]),
             ],
         ]);
       },
@@ -6781,7 +6832,7 @@ class FixedRequestsAdminView extends StatelessWidget {
               child: Text(tr('אין בקשות חדשות', 'No new requests'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary)),
             );
           }
-          return Column(children: [
+          return AdaptiveGrid(children: [
             for (final d in pending)
               Semantics(
                 identifier: 'fixed_request_${d.id}',
@@ -6840,7 +6891,7 @@ class FixedRequestsAdminView extends StatelessWidget {
               child: Text(tr('עוד אין שעות קבועות', 'No fixed slots yet'), textAlign: TextAlign.center, style: TextStyle(color: textSecondary)),
             );
           }
-          return Column(children: [
+          return AdaptiveGrid(children: [
             for (final d in fixed)
               Container(
                 margin: const EdgeInsets.only(bottom: spaceXs),
@@ -7381,8 +7432,10 @@ class _CourtsAdminTabState extends State<CourtsAdminTab> {
               ),
             ),
             const SizedBox(height: spaceXs),
-            for (final id in (v['stadiumIds'] as List).cast<String>())
-              if (stadiumById(id) != null) _courtCard(stadiumById(id)!, adminsByCourt[id] ?? const []),
+            AdaptiveGrid(children: [
+              for (final id in (v['stadiumIds'] as List).cast<String>())
+                if (stadiumById(id) != null) _courtCard(stadiumById(id)!, adminsByCourt[id] ?? const []),
+            ]),
             const SizedBox(height: spaceSm),
           ],
           if (hiddenCourts.isNotEmpty) ...[
@@ -7588,7 +7641,7 @@ class _AddCourtScreenState extends State<AddCourtScreen> {
         child: Text(tr('הוספת מגרש', 'ADD COURT'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
       )),
       body: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: const BoxConstraints(maxWidth: 760),
         child: Form(key: _formKey, child: ListView(padding: const EdgeInsets.all(spaceMd), children: [
           _dropdown<String>(tr('מועדון', 'Club'), 'add_court_club', _clubId, [
             DropdownMenuItem(value: _newClub, child: Text(tr('מועדון חדש', 'New club'))),
@@ -8045,7 +8098,16 @@ class _VenueSelectionScreenState extends State<VenueSelectionScreen> with Widget
                             sports: const [kSportFootball, kSportPadel, kSportTennis],
                             available: allSports,
                             selected: showSportFilter ? _sportFilter : null,
-                            onSelected: (s) => setState(() => _sportFilter = _sportFilter == s ? null : s),
+                            onSelected: (s) => setState(() {
+                              _sportFilter = _sportFilter == s ? null : s;
+                              // e.g. tennis while on Nazareth with no tennis there:
+                              // show every city instead of an empty page.
+                              final sport = _sportFilter, city = _cityFilter;
+                              if (sport != null && city != null &&
+                                  !readyVenues.any((v) => venueCityKey(v) == city && sportsOfVenue(v).contains(sport))) {
+                                _cityFilter = null;
+                              }
+                            }),
                           ),
                           const SizedBox(height: spaceLg),
                         ],
