@@ -1994,7 +1994,7 @@ String cleanPersonName(String raw) {
 }
 
 /// City input that suggests Israeli cities from the first letter typed
-/// (Hebrew or English). A place that isn't listed can still be typed in.
+/// (Hebrew or English). Only listed cities pass validation.
 /// [onPicked] gets the (Hebrew, English) pair when a suggestion is chosen.
 class CityField extends StatefulWidget {
   final TextEditingController controller;
