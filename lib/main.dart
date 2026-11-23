@@ -4470,7 +4470,8 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
             final b = d.data();
             return (b['userName'] as String? ?? '').toLowerCase().contains(_search.toLowerCase()) ||
                    (b['date'] as String? ?? '').contains(_search) ||
-                   (b['phone'] as String? ?? '').contains(_search);
+                   (b['phone'] as String? ?? '').contains(_search) ||
+                   (b['bookingCode']?.toString() ?? '').contains(_search.trim());
           }).toList();
         }
 
@@ -4758,7 +4759,25 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
           ),
           Expanded(child: TabBarView(children: [
             _buildStadiumReports(),
-            _buildBookingsList(upcoming: false),
+            Column(children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                child: Semantics(identifier: 'past_search', container: true, child: TextField(
+                  onChanged: (v) => setState(() => _search = v),
+                  style: TextStyle(color: textPrimary, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: tr('חיפוש לפי מספר הזמנה, שם או טלפון', 'Search by booking number, name or phone'),
+                    hintStyle: TextStyle(color: textSecondary, fontSize: 12),
+                    prefixIcon: Icon(Icons.search, color: textSecondary, size: 18),
+                    filled: true, fillColor: cardColor, contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: borderColor)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: accentGreen, width: 1.5)),
+                  ),
+                )),
+              ),
+              Expanded(child: _buildBookingsList(upcoming: false)),
+            ]),
           ])),
         ]),
       );
@@ -13257,8 +13276,17 @@ class _AdminAppBarState extends State<AdminAppBar> {
     return AppBar(
       backgroundColor: bgColor,
       elevation: 0,
+      scrolledUnderElevation: 0,
+      shape: Border(bottom: BorderSide(color: borderColor)),
       iconTheme: IconThemeData(color: textSecondary),
-      title: widget.title,
+      titleSpacing: 12,
+      title: Row(mainAxisSize: MainAxisSize.min, children: [
+        const AppLogo(size: 34, radius: 9),
+        if (widget.title != null) ...[
+          const SizedBox(width: 10),
+          Flexible(child: widget.title!),
+        ],
+      ]),
       bottom: widget.bottom,
       actions: [
         PopupMenuButton<String>(
