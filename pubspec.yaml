@@ -70,6 +70,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/icon/logo.png
   # Oswald (SIL Open Font License, assets/fonts/OFL-Oswald.txt): big numbers.
   fonts:
     - family: Oswald
