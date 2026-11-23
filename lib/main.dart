@@ -7524,8 +7524,11 @@ class _AddCourtScreenState extends State<AddCourtScreen> {
       var cityHe = (venueById(_clubId)?['region'] as String?) ?? '';
       if (_clubId == _newClub) {
         final clubName = _clubNameCtrl.text.trim();
-        cityHe = _cityHeCtrl.text.trim();
-        final cityEn = _cityEnCtrl.text.trim();
+        // Both names come from the list entry of the Hebrew city, so the
+        // English one can't be a different (or mistyped) place.
+        final listed = exactCity(_cityHeCtrl.text) ?? (_cityHeCtrl.text.trim(), _cityEnCtrl.text.trim());
+        cityHe = listed.$1;
+        final cityEn = listed.$2;
         final ref = db.collection('venues').doc();
         venueId = ref.id;
         const sportHe = {kSportPadel: 'פאדל', kSportTennis: 'טניס', kSportFootball: 'כדורגל'};
