@@ -135,6 +135,10 @@ service cloud.firestore {
       allow update: if isAdmin() || (
         managesStadium(resource.data.get('stadiumId', ''))
         && managesStadium(request.resource.data.get('stadiumId', ''))
+      ) || (
+        // The player it belongs to can free single dates ("not coming").
+        isMember() && resource.data.get('userId', '') == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['skipDates'])
       );
       allow delete: if isAdmin() || managesStadium(resource.data.get('stadiumId', ''));
     }

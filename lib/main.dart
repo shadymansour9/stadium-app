@@ -638,7 +638,8 @@ Color _colorForVenue(String? color) {
 int _weekdayFromDateString(String date) {
   final parts = date.split('/');
   final now = DateTime.now();
-  final d = DateTime(now.year, int.parse(parts[1]), int.parse(parts[0]));
+  var d = DateTime(now.year, int.parse(parts[1]), int.parse(parts[0]));
+  if (now.difference(d).inDays > 180) d = DateTime(now.year + 1, d.month, d.day);
   return d.weekday % 7; // 0=Sun … 6=Sat
 }
 
@@ -693,6 +694,7 @@ bool recurringBlockForSlot(List<Map<String, dynamic>> blocks, String stadiumId, 
     if ((b['active'] ?? true) != true) continue;
     if ((b['stadiumId'] ?? '') != stadiumId) continue;
     if ((b['dayOfWeek'] as int?) != wd) continue;
+    if (fixedSkipDates(b).contains(dateStr)) continue;
     if ((b['time'] as String?) == slotLabel) return true;
   }
   return false;
@@ -704,6 +706,7 @@ String? recurringReasonForSlot(List<Map<String, dynamic>> blocks, String stadium
     if ((b['active'] ?? true) != true) continue;
     if ((b['stadiumId'] ?? '') != stadiumId) continue;
     if ((b['dayOfWeek'] as int?) != wd) continue;
+    if (fixedSkipDates(b).contains(dateStr)) continue;
     if ((b['time'] as String?) == slotLabel) {
       return (b['reason'] as String?) ?? tr('קבוע', 'FIXED');
     }
@@ -717,9 +720,198 @@ String? recurringIdForSlot(List<Map<String, dynamic>> blocks, String stadiumId, 
     if ((b['active'] ?? true) != true) continue;
     if ((b['stadiumId'] ?? '') != stadiumId) continue;
     if ((b['dayOfWeek'] as int?) != wd) continue;
+    if (fixedSkipDates(b).contains(dateStr)) continue;
     if ((b['time'] as String?) == slotLabel) return b['id'] as String?;
   }
   return null;
+}
+
+/// Dates ("d/M") a weekly fixed slot is free this once: the group isn't
+/// coming, so anyone can book it. The week after it is theirs again.
+List<String> fixedSkipDates(Map<String, dynamic> block) =>
+    ((block['skipDates'] as List?) ?? const []).map((e) => e.toString()).toList();
+
+String fixedDateKey(DateTime d) => '${d.day}/${d.month}';
+
+/// The fixed slot freed for this date, if any (to show it and take it back).
+Map<String, dynamic>? freedFixedForSlot(List<Map<String, dynamic>> blocks, String stadiumId, String dateStr, String slotLabel) {
+  final wd = _weekdayFromDateString(dateStr);
+  for (final b in blocks) {
+    if ((b['active'] ?? true) != true) continue;
+    if ((b['stadiumId'] ?? '') != stadiumId) continue;
+    if ((b['dayOfWeek'] as int?) != wd) continue;
+    if ((b['time'] as String?) == slotLabel && fixedSkipDates(b).contains(dateStr)) return b;
+  }
+  return null;
+}
+
+/// The next [count] dates of a weekly fixed slot; today counts while its
+/// start time is still ahead.
+List<DateTime> nextFixedDates(Map<String, dynamic> block, {int count = 6, DateTime? now}) {
+  final t = now ?? DateTime.now();
+  final day = (block['dayOfWeek'] as int?) ?? 0;
+  final start = ((block['time'] as String?) ?? '00:00').split(' - ').first.trim();
+  int startMin;
+  try { startMin = _minutesOf(start); } catch (_) { startMin = 0; }
+  final out = <DateTime>[];
+  var d = DateTime(t.year, t.month, t.day);
+  while (out.length < count) {
+    if (d.weekday % 7 == day) {
+      final isToday = d.year == t.year && d.month == t.month && d.day == t.day;
+      if (!isToday || startMin > t.hour * 60 + t.minute) out.add(d);
+    }
+    d = DateTime(d.year, d.month, d.day + 1);
+  }
+  return out;
+}
+
+/// Picks the dates a fixed slot is free once (court admin or the player it
+/// belongs to). A date someone already booked can't be taken back.
+Future<void> showFixedSkipDialog(BuildContext context, String blockId, Map<String, dynamic> block) async {
+  final dates = nextFixedDates(block);
+  final before = fixedSkipDates(block).toSet();
+  final chosen = await showDialog<Set<String>>(context: context, builder: (dctx) {
+    final sel = {...before};
+    return StatefulBuilder(builder: (dctx, setD) => AlertDialog(
+      backgroundColor: cardColor,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: Text(tr('לא מגיעים? לפנות את השעה', 'Not coming? Free the slot'),
+        style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(tr('בתאריך שתסמן, השעה \u200E${block['time'] ?? ''}\u200F תהיה פנויה וכל אחד יוכל להזמין אותה. בשבוע שאחרי היא חוזרת להיות קבועה.',
+            'On the dates you mark, ${block['time'] ?? ''} is free for anyone to book. The week after, it is fixed again.'),
+          style: TextStyle(color: textSecondary, fontSize: 13, height: 1.4)),
+        const SizedBox(height: 14),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final d in dates)
+            Semantics(identifier: 'fixed_skip_${d.day}_${d.month}', container: true, button: true, child: FilterChip(
+              label: Text('${hebrewWeekday(d.weekday, isHebrew)} ${d.day}/${d.month}'),
+              selected: sel.contains(fixedDateKey(d)),
+              onSelected: (v) => setD(() => v ? sel.add(fixedDateKey(d)) : sel.remove(fixedDateKey(d))),
+              backgroundColor: bgSecondary,
+              selectedColor: accentGreen,
+              checkmarkColor: onAccent,
+              labelStyle: TextStyle(color: sel.contains(fixedDateKey(d)) ? onAccent : textPrimary, fontWeight: FontWeight.w700),
+              side: BorderSide(color: sel.contains(fixedDateKey(d)) ? accentGreen : borderColor),
+            )),
+        ]),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(dctx), child: Text(tr('ביטול', 'Cancel'), style: TextStyle(color: textSecondary))),
+        Semantics(identifier: 'fixed_skip_save', container: true, button: true, child: ElevatedButton(
+          onPressed: () => Navigator.pop(dctx, sel),
+          style: ElevatedButton.styleFrom(backgroundColor: accentGreen, foregroundColor: onAccent, iconColor: onAccent),
+          child: Text(tr('שמור', 'Save'), style: const TextStyle(fontWeight: FontWeight.w900)),
+        )),
+      ],
+    ));
+  });
+  if (chosen == null) return;
+  // Only upcoming dates are kept, so old ones don't pile up.
+  final upcoming = nextFixedDates(block, count: 26).map(fixedDateKey).toSet();
+  final keep = chosen.where(upcoming.contains).toSet();
+  try {
+    final takenBack = before.difference(keep).where(upcoming.contains).toList();
+    if (takenBack.isNotEmpty) {
+      final booked = await FirebaseFirestore.instance.collection('bookings')
+          .where('stadiumId', isEqualTo: block['stadiumId']).get();
+      final clash = takenBack.where((dk) => booked.docs.any((b) => b.data()['date'] == dk && b.data()['time'] == block['time'])).toList();
+      if (clash.isNotEmpty) {
+        keep.addAll(clash);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(tr('ב-${clash.join(', ')} מישהו כבר הזמין את השעה, אז היא נשארת פנויה', 'Someone already booked ${clash.join(', ')}, so it stays free')),
+            backgroundColor: colorWarning,
+          ));
+        }
+        return _saveSkips(context, blockId, keep, quiet: true);
+      }
+    }
+    await _saveSkips(context, blockId, keep);
+  } catch (e) {
+    if (context.mounted) showAppError(context, e);
+  }
+}
+
+Future<void> _saveSkips(BuildContext context, String blockId, Set<String> keep, {bool quiet = false}) async {
+  try {
+    await FirebaseFirestore.instance.collection('recurring_blocks').doc(blockId).update({'skipDates': keep.toList()});
+    if (quiet || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(keep.isEmpty ? tr('השעה הקבועה שמורה בכל השבועות', 'Kept every week')
+          : tr('פנוי לאחרים ב: ${keep.join(', ')}', 'Free for others on: ${keep.join(', ')}')),
+      backgroundColor: accentGreen,
+    ));
+  } catch (e) {
+    if (context.mounted) showAppError(context, e);
+  }
+}
+
+/// On My bookings: the player's own weekly fixed slots, with "not coming"
+/// to free a date for others.
+class MyFixedSlotsCard extends StatelessWidget {
+  const MyFixedSlotsCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('recurring_blocks').where('userId', isEqualTo: uid).snapshots(),
+      builder: (ctx, snap) {
+        final mine = (snap.data?.docs ?? const []).where((d) => (d.data()['active'] ?? true) == true).toList();
+        if (mine.isEmpty) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: Column(children: [
+            for (final d in mine) _slot(context, d.id, d.data()),
+          ]),
+        );
+      },
+    );
+  }
+
+  Widget _slot(BuildContext context, String id, Map<String, dynamic> b) {
+    final next = nextFixedDates(b, count: 1).first;
+    final freed = fixedSkipDates(b).toSet();
+    final upcomingFreed = nextFixedDates(b, count: 26).map(fixedDateKey).where(freed.contains).toList();
+    final day = (b['dayOfWeek'] as int?) ?? 0;
+    final nextFree = freed.contains(fixedDateKey(next));
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.purple.withValues(alpha: 0.4))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.event_repeat, color: Colors.purple, size: 18),
+          const SizedBox(width: 6),
+          Text(tr('השעה הקבועה שלך', 'YOUR FIXED SLOT'), style: const TextStyle(color: Colors.purple, fontSize: 11, fontWeight: FontWeight.w900)),
+        ]),
+        const SizedBox(height: 6),
+        Text((b['stadiumName'] as String?) ?? '', style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900, fontSize: 16)),
+        const SizedBox(height: 2),
+        Text('${isHebrew ? 'כל יום ${trainingDayNames[day]}' : 'Every ${trainingDayNamesEn[day]}'} · \u200E${b['time'] ?? ''}',
+          style: TextStyle(color: textSecondary, fontSize: 13)),
+        const SizedBox(height: 4),
+        Text(nextFree
+              ? tr('ב-${fixedDateKey(next)} פינית את השעה לאחרים', 'On ${fixedDateKey(next)} you freed it for others')
+              : tr('הבא: ${hebrewWeekday(next.weekday, isHebrew)} ${fixedDateKey(next)}', 'Next: ${hebrewWeekday(next.weekday, isHebrew)} ${fixedDateKey(next)}'),
+          style: TextStyle(color: nextFree ? colorWarning : accentGreen, fontSize: 13, fontWeight: FontWeight.w800)),
+        if (upcomingFreed.isNotEmpty && !(upcomingFreed.length == 1 && nextFree))
+          Text(tr('פנוי לאחרים: ${upcomingFreed.join(', ')}', 'Free for others: ${upcomingFreed.join(', ')}'),
+            style: TextStyle(color: textSecondary, fontSize: 12)),
+        const SizedBox(height: 8),
+        Semantics(identifier: 'my_fixed_skip_$id', container: true, button: true, child: OutlinedButton.icon(
+          onPressed: () => showFixedSkipDialog(context, id, b),
+          icon: Icon(Icons.event_busy_outlined, size: 18, color: accentGreen),
+          label: Text(tr('לא מגיעים? לפנות תאריך', 'Not coming? Free a date'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+          style: OutlinedButton.styleFrom(side: BorderSide(color: accentGreen.withValues(alpha: 0.5)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+        )),
+      ]),
+    );
+  }
 }
 
 // Default booking types (used if none defined in Firestore)
@@ -4066,6 +4258,54 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
     );
   }
 
+  /// A fixed slot in the schedule: free it for this date only, or cancel it.
+  Future<void> _fixedSlotMenu(String blockId, String label) async {
+    final date = _days[_selDay]['date']!;
+    final choice = await showDialog<String>(context: context, builder: (dctx) => SimpleDialog(
+      backgroundColor: cardColor,
+      title: Text(tr('שעה קבועה · \u200E$label', 'Fixed slot · $label'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900)),
+      children: [
+        Semantics(identifier: 'fixed_free_once', container: true, button: true, child: SimpleDialogOption(
+          onPressed: () => Navigator.pop(dctx, 'once'),
+          child: Row(children: [
+            Icon(Icons.event_available, color: accentGreen),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('לפנות רק ב-$date', 'Free only on $date'), style: TextStyle(color: textPrimary, fontWeight: FontWeight.w800)),
+              Text(tr('הקבוצה לא מגיעה, מישהו אחר יוכל להזמין. בשבוע הבא חוזר לקבוע.', 'The group is not coming; others can book it. Fixed again next week.'),
+                style: TextStyle(color: textSecondary, fontSize: 12)),
+            ])),
+          ]),
+        )),
+        SimpleDialogOption(
+          onPressed: () => Navigator.pop(dctx, 'all'),
+          child: Row(children: [
+            const Icon(Icons.delete_outline, color: Colors.red),
+            const SizedBox(width: 10),
+            Text(tr('לבטל לכל השבועות', 'Cancel every week'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w800)),
+          ]),
+        ),
+      ],
+    ));
+    if (choice == 'once') await _setFixedFree(blockId, date, true);
+    if (choice == 'all') await _cancelRecurringBlock(blockId, label);
+  }
+
+  Future<void> _setFixedFree(String blockId, String date, bool free) async {
+    try {
+      await FirebaseFirestore.instance.collection('recurring_blocks').doc(blockId).update({
+        'skipDates': free ? FieldValue.arrayUnion([date]) : FieldValue.arrayRemove([date]),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(free ? tr('ב-$date השעה פנויה להזמנה', '$date is free to book') : tr('השעה חזרה להיות קבועה', 'Fixed again')),
+        backgroundColor: accentGreen,
+      ));
+    } catch (e) {
+      if (mounted) showAppError(context, e);
+    }
+  }
+
   Future<void> _cancelRecurringBlock(String docId, String label) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -4603,6 +4843,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               final isFixed   = recurringBlockForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label);
               final fixedReason = isFixed ? recurringReasonForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label) : null;
               final fixedId   = isFixed ? recurringIdForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label) : null;
+              final freedFixed = isFixed ? null : freedFixedForSlot(recurringBlocks, widget.stadiumId, _days[_selDay]['date']!, label);
               if (isToday) {
                 final h = int.parse(slot['start']!.split(':')[0]);
                 if (h < now.hour) return const SizedBox.shrink();
@@ -4613,7 +4854,7 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
               else if (isBlocked)  { bg = Colors.red.withValues(alpha: 0.08);   border = Colors.red.withValues(alpha: 0.4);    textClr = Colors.red; }
               else                 { bg = cardColor; border = accentGreen.withValues(alpha: 0.3); textClr = textPrimary; }
               return GestureDetector(
-                onLongPress: (isFixed && fixedId != null) ? () => _cancelRecurringBlock(fixedId, label) : null,
+                onLongPress: (isFixed && fixedId != null) ? () => _fixedSlotMenu(fixedId, label) : null,
                 child: Container(
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -4623,16 +4864,22 @@ class _AdminStadiumTabState extends State<AdminStadiumTab> with SingleTickerProv
                   if (isBooked)        _badge(tr('תפוס','BOOKED'), colorWarning)
                   else if (isFixed)    _badge(fixedReason ?? tr('קבוע', 'FIXED'), Colors.purple)
                   else if (isBlocked)  _badge(tr('חסום','BLOCKED'), Colors.red)
+                  else if (freedFixed != null) _badge(tr('פנוי · הקבועים לא מגיעים', 'FREE · fixed group off'), accentGreen)
                   else                 _badge(tr('פנוי','FREE'), accentGreen),
                   const Spacer(),
                   if (isFixed) ...[
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      color: Colors.purple,
-                      tooltip: tr('בטל הזמנה קבועה', 'Cancel recurring'),
-                      onPressed: fixedId != null ? () => _cancelRecurringBlock(fixedId, label) : null,
-                    ),
+                    Semantics(identifier: 'fixed_options_$label', container: true, button: true, child: TextButton(
+                      onPressed: fixedId != null ? () => _fixedSlotMenu(fixedId, label) : null,
+                      child: Text(tr('אפשרויות', 'Options'), style: const TextStyle(color: Colors.purple, fontWeight: FontWeight.w800, fontSize: 12)),
+                    )),
                   ] else if (!isBooked) ...[
+                    if (freedFixed != null)
+                      IconButton(
+                        icon: const Icon(Icons.undo_rounded, size: 18),
+                        color: Colors.purple,
+                        tooltip: tr('החזר לקבוע', 'Back to fixed'),
+                        onPressed: () => _setFixedFree(freedFixed['id'] as String, _days[_selDay]['date']!, false),
+                      ),
                     IconButton(icon: const Icon(Icons.edit_outlined, size: 18), color: textSecondary, tooltip: tr('שינוי השעות', 'Change times'), onPressed: () => _editSlot(slot, slots.indexOf(slot), bookedLabels, slots)),
                     if (simple)
                       TextButton(
@@ -6376,6 +6623,11 @@ class FixedRequestsAdminView extends StatelessWidget {
       final i = (d as int?) ?? 0;
       return isHebrew ? 'כל יום ${trainingDayNames[i]}' : 'Every ${trainingDayNamesEn[i]}';
     }
+    String freedLine(Map<String, dynamic> b) {
+      final skip = fixedSkipDates(b);
+      final f = nextFixedDates(b, count: 26).map(fixedDateKey).where(skip.contains).toList();
+      return f.isEmpty ? '' : '\n${tr('פנוי חד-פעמי', 'Free once')}: ${f.join(', ')}';
+    }
     return ListView(padding: const EdgeInsets.all(spaceMd), children: [
       _adminHint(tr('שחקנים יכולים לבקש את אותה שעה כל שבוע. כשאתה מאשר, השעה נשמרת להם קבוע ואף אחד אחר לא יכול להזמין אותה.',
           'Players can ask for the same time every week. When you approve, that time is kept for them and nobody else can book it.')),
@@ -6462,8 +6714,12 @@ class FixedRequestsAdminView extends StatelessWidget {
                 child: Row(children: [
                   Icon(Icons.event_repeat, color: Colors.purple, size: 20),
                   const SizedBox(width: spaceXs),
-                  Expanded(child: Text('${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}\n${d.data()['reason'] ?? ''}',
+                  Expanded(child: Text('${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}\n${d.data()['reason'] ?? ''}${freedLine(d.data())}',
                     style: TextStyle(color: textPrimary, fontSize: 13, fontWeight: FontWeight.w700, height: 1.4))),
+                  Semantics(identifier: 'fixed_skip_open_${d.id}', container: true, button: true, child: TextButton(
+                    onPressed: () => showFixedSkipDialog(context, d.id, d.data()),
+                    child: Text(tr('פנה תאריך', 'Free a date'), style: TextStyle(color: accentGreen, fontWeight: FontWeight.w800)),
+                  )),
                   TextButton(
                     onPressed: () => _cancelFixed(context, d.id, '${dayLabel(d.data()['dayOfWeek'])} · ${d.data()['time'] ?? ''}'),
                     child: Text(tr('בטל', 'Cancel'), style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w800)),
@@ -10632,7 +10888,10 @@ class _MyBookingsScreenState extends State<MyBookingsScreen> with SingleTickerPr
             } catch(_) { upcoming.add(doc); }
           }
           return TabBarView(controller: _tab, children: [
-            _buildList(context, upcoming, myName, user, tr('אין הזמנות עתידיות','No upcoming bookings')),
+            Column(children: [
+              const MyFixedSlotsCard(),
+              Expanded(child: _buildList(context, upcoming, myName, user, tr('אין הזמנות עתידיות','No upcoming bookings'))),
+            ]),
             _buildList(context, past, myName, user, tr('אין היסטוריה','No booking history'), isPast: true),
           ]);
         },
