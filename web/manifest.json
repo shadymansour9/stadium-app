@@ -3,9 +3,9 @@
     "short_name": "Stadium IL",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#F4F5F7",
-    "theme_color": "#F4F5F7",
-    "description": "A new Flutter project.",
+    "background_color": "#0F141E",
+    "theme_color": "#0F141E",
+    "description": "Stadium IL - book football, padel and tennis courts",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

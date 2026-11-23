@@ -1,0 +1,18 @@
+# App icon for Android, iOS and web. Regenerate with:
+#   dart run flutter_launcher_icons
+# Sources are in assets/icon (icon_adaptive.png = the icon shrunk on its own
+# background, so round Android masks don't cut the ball).
+flutter_launcher_icons:
+  image_path: "assets/icon/icon.png"
+  android: "launcher_icon"
+  min_sdk_android: 21
+  adaptive_icon_background: "#0F141E"
+  adaptive_icon_foreground: "assets/icon/icon_adaptive.png"
+  adaptive_icon_foreground_inset: 0
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    background_color: "#0F141E"
+    theme_color: "#0F141E"
