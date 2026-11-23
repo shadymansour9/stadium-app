@@ -1169,7 +1169,7 @@ String _errorMessageFor(Object error) {
     switch (error.code) {
       case 'wrong-password':
       case 'invalid-credential':
-        return tr('סיסמה שגויה', 'Wrong password');
+        return tr('אימייל או סיסמה שגויים', 'Wrong email or password');
       case 'user-not-found':
         return tr('משתמש לא נמצא', 'User not found');
       case 'email-already-in-use':
@@ -2998,7 +2998,7 @@ class _LoginScreenState extends State<LoginScreen> {
           SnackBar(
             content: Semantics(
               identifier: 'login_error_message',
-              child: Text(e.message ?? 'Login failed'),
+              child: Text(_errorMessageFor(e)),
             ),
             backgroundColor: colorError,
           ),
